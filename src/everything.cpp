@@ -19,7 +19,13 @@
 
 
 
-
+// TODO:
+// State machine details for reading ADC
+// Storing temperatures
+// CLI
+// More structure to the code
+// Find the STM32F417 CPU - and define a CPU
+// Define boards
 
 
 
@@ -34,6 +40,7 @@
 #define MAX_TEMP_STRINGS 8
 #define MAX_TEMP_SENSORS_PER_STRING 4
 #define MAX_DOORS 1
+#define MAX_ADC 32
 
 enum Voltage {
     voltage_12,         // 12V outputs
@@ -55,6 +62,7 @@ struct Hardware{
 // -------------------------------
 // Switches and Current Monitoring
 
+// CURRENT ADDRESS / VOLTAGE ADDRESS of 255 = NULL
 struct Hardware h[] = {
     {voltage_12, 0, PA0, 3, NULL, "12V Switched Output  1"},
     {voltage_12, 1, PA1, 3, NULL, "12V Switched Output  2"},
@@ -86,7 +94,7 @@ struct Hardware h[] = {
     {voltage_supply, 0, NULL, 3, NULL, "12V Supply - Total Current Usage"},
     {voltage_supply, 1, NULL, 3, NULL, "48V Supply - Total Current Usage"},
     {voltage_supply, 2, NULL, 3, NULL, "48V Air Conditioner Supply - Switched"},
-    {voltage_supply, 3, NULL, 3, NULL, "48V Supply - Switched"},
+    {voltage_supply, 3, NULL, 3, NULL, "48V Supply - Switched"}
 };
 
 // ----------------
@@ -130,8 +138,16 @@ struct FanPorts fanpins[MAX_FAN_PWM_RPM]{
 };
 
 
+struct DoorPins{
+  uint8_t index;
+  bool h_bridge; // True = H-Bridge, idle off; False = power and direction
+  uint32_t pin_a; // H-Bridge = Open. Else Power
+  uint32_t pin_b; // H-Bridge = Close. Else Direction
+};
 
-
+struct DoorPins doorpins[MAX_DOORS]{
+  {0, false, NULL, NULL}
+};
 
 
 
@@ -211,7 +227,38 @@ struct FanPWMRPM fan_pwm_rpm[MAX_FAN_PWM_RPM];
 // Add how long since valid temperature read
 struct Temperatures {
     float temp;
-}
+    uint32_t secondsSinceStart;
+};
+
+
+
+
+// ----
+// Time
+// ----
+
+uint32_t secondsSinceStart = 0;
+
+
+// ---
+// ADC
+// ---
+
+// Index is by hardware address
+
+struct ADCstorage{
+  uint16_t adc;
+  uint32_t secondsSinceStart;
+};
+
+struct ADCstorage adcstorage [MAX_ADC];
+
+
+
+
+
+
+
 
 
 
@@ -273,8 +320,9 @@ void setup_RPM(void)
 void sample_RPM(void)
 {
 
-  static uint32_t lasttime = 0;
-  uint32_t now = millis();
+  static uint32_t lasttime;
+  uint32_t now;
+  now = millis();
   if (now < lasttime){ // Happens every 49 days or so
     lasttime = now;
     return;
@@ -297,38 +345,6 @@ void sample_RPM(void)
 // ----------
 // Fans - PWM
 // ----------
-
-void setup_PWM (void)
-{
-
-
-  stmFanTimer_TIM2->pause();
-  stmFanTimer_TIM4->pause();
-
-  stmFanTimer_TIM2->setOverflow(25000, HERTZ_FORMAT);
-  stmFanTimer_TIM4->setOverflow(25000, HERTZ_FORMAT);
-
-  stmFanTimer_TIM2->setMode(3, TIMER_OUTPUT_COMPARE_PWM1, fanpins[0].pwm_pin); // TODO: Check ALT if needed
-  stmFanTimer_TIM2->setMode(4, TIMER_OUTPUT_COMPARE_PWM1, fanpins[1].pwm_pin);
-
-  stmFanTimer_TIM4->setMode(1, TIMER_OUTPUT_COMPARE_PWM1, fanpins[2].pwm_pin);
-
-  // stmFanTimer_TIM3->setMode(2, TIMER_OUTPUT_COMPARE_PWM1, PA7_ALT1);
-  stmFanTimer_TIM4->setMode(2, TIMER_OUTPUT_COMPARE_PWM1, fanpins[3].pwm_pin | ALT1); // Alternate timer needs a different pin name. WTF
-
-  stmFanTimer_TIM4->setMode(3, TIMER_OUTPUT_COMPARE_PWM1, fanpins[4].pwm_pin | ALT1);
-  stmFanTimer_TIM4->setMode(4, TIMER_OUTPUT_COMPARE_PWM1, fanpins[5].pwm_pin | ALT1);
-
-  stmFanTimer_TIM2->resume();
-  stmFanTimer_TIM4->resume();
-
-  for (uint8_t i = 0; i < MAX_FAN_PWM_RPM; i++){
-    fan_pwm_rpm[i].pwm = 0;
-  }
-
-  setFanPWMs();
-
-}
 
 
 // Interface
@@ -362,6 +378,39 @@ void setFanPWMs(void)
   for (uint8_t i = 0; i < MAX_FAN_PWM_RPM; i++){
     setFanPWM(i, fan_pwm_rpm[i].pwm);
   }  
+}
+
+
+void setup_PWM (void)
+{
+
+
+  stmFanTimer_TIM2->pause();
+  stmFanTimer_TIM4->pause();
+
+  stmFanTimer_TIM2->setOverflow(25000, HERTZ_FORMAT);
+  stmFanTimer_TIM4->setOverflow(25000, HERTZ_FORMAT);
+
+  stmFanTimer_TIM2->setMode(3, TIMER_OUTPUT_COMPARE_PWM1, fanpins[0].pwm_pin); // TODO: Check ALT if needed
+  stmFanTimer_TIM2->setMode(4, TIMER_OUTPUT_COMPARE_PWM1, fanpins[1].pwm_pin);
+
+  stmFanTimer_TIM4->setMode(1, TIMER_OUTPUT_COMPARE_PWM1, fanpins[2].pwm_pin);
+
+  // stmFanTimer_TIM3->setMode(2, TIMER_OUTPUT_COMPARE_PWM1, PA7_ALT1);
+  stmFanTimer_TIM4->setMode(2, TIMER_OUTPUT_COMPARE_PWM1, fanpins[3].pwm_pin | ALT1); // Alternate timer needs a different pin name. WTF
+
+  stmFanTimer_TIM4->setMode(3, TIMER_OUTPUT_COMPARE_PWM1, fanpins[4].pwm_pin | ALT1);
+  stmFanTimer_TIM4->setMode(4, TIMER_OUTPUT_COMPARE_PWM1, fanpins[5].pwm_pin | ALT1);
+
+  stmFanTimer_TIM2->resume();
+  stmFanTimer_TIM4->resume();
+
+  for (uint8_t i = 0; i < MAX_FAN_PWM_RPM; i++){
+    fan_pwm_rpm[i].pwm = 0;
+  }
+
+  setFanPWMs();
+
 }
 
 
@@ -471,6 +520,197 @@ void temperature_loop (void)
 
 
 
+// ----
+// DOOR
+
+Atm_led door_pin_a;
+Atm_led door_pin_b;
+Atm_step door_step;
+
+
+void door (uint8_t door_number, bool state)
+{
+  // This code uses the AUTOMATON state machien
+  // https://github.com/tinkerspy/Automaton/tree/master
+  //
+  // 
+  // Operations are done using state machines internally.  
+  // State = 0 = Lock. 1 = Unlock
+  if (door_number < MAX_DOORS){
+    if (doorpins[door_number].h_bridge == false){
+      // This use case is for when we have one relay controlling power to the locks, and the other
+      // controlling direction (Lock or Unlock)
+      //
+      // Set direction -> Turn power on -> turn off -> unset direction
+      // time pin_a pin_b
+      // 0    False False - Neutral State just in case
+      // 500  False DIR   - Set direction
+      // 600  True  DIR   - Turn power on
+      // 1600 False DIR   - Turn power off
+      // 1700 False False - Neutral State
+      door_pin_a.begin (doorpins[door_number].pin_a)
+        .lead (600)
+        .on()
+        .blink (1000)
+        .off();
+      if (state){
+        // Only needed if we are chanting the state of pin B
+        door_pin_b.begin (doorpins[door_number].pin_b)
+        .lead(500)
+        .blink (1200)
+        .off();
+      }
+    }
+    if (doorpins[door_number].h_bridge == true){
+      // This is a H-Bridge use case. In steady state, both relays
+      // are off. To unlock, one realy is turned on for a short time
+      // and then it is turned off.
+
+      // turn off both outputs for 500 mSec
+      // Turn on the correct output for 1000 mSec
+      // Turn off both outputs.
+
+      if (state == true){
+        door_pin_a.begin (doorpins[door_number].pin_a)
+          .off()
+          .pause(500)
+          .blink(1000)
+          .off();
+        door_pin_b.begin (doorpins[door_number].pin_b)
+          .off();
+      }
+      if (state == true){
+        door_pin_a.begin (doorpins[door_number].pin_a)
+          .off();
+        door_pin_b.begin (doorpins[door_number].pin_b)
+          .off()
+          .pause(500)
+          .blink(1000)
+          .off();
+      }
+
+
+
+
+      // Set direction -> Turn power on -> turn off -> unset direction
+      // time pin_a pin_b
+      // 0    False False - Neutral State just in case
+      // 500  False DIR   - Set direction
+      // 600  True  DIR   - Turn power on
+      // 1600 False DIR   - Turn power off
+      // 1700 False False - Neutral State
+      door_pin_a.begin (doorpins[door_number].pin_a)
+        .lead (600)
+        .on()
+        .blink (1000)
+        .off();
+      if (state){
+        // Only needed if we are chanting the state of pin B
+        door_pin_b.begin (doorpins[door_number].pin_b)
+        .lead(500)
+        .blink (1200)
+        .off();
+      }
+    }
+
+
+
+  }
+
+}
+
+
+
+
+// ---------------------------
+// Current and Voltage Reading
+
+Atm_timer adc_loop_timer;
+Atm_timer adc_step_timer;
+uint8_t adc_index = 0;
+
+// To read current or voltage
+// - Set the I2C Multiplexor
+// - Request conversion via I2C
+// - Read the value
+//
+//https://github.com/tinkerspy/Automaton/tree/master
+
+// States 
+// 1 - Set I2C Multiplexor
+//   delay
+// 2 - Set continuous read on the correct input
+//   delay
+// 3 - Read the port
+
+
+void adc_callback_state_3_read_adc (int idx, int v, int up)
+{
+  // Read the ADC
+  // Store it
+
+  adcstorage[adc_index].adc = 0; // The value actually gets stored here.
+  adcstorage[adc_index].secondsSinceStart = secondsSinceStart;
+
+
+}
+
+
+void adc_callback_state_2_set_adc_port_and_read (int idx, int v, int up)
+{
+  // Set read and input port
+  uint8_t adc_port = adc_index & 0x03;
+
+  // Use this port on the ADC
+
+  adc_step_timer.begin(1).onTimer(adc_callback_state_3_read_adc).start();
+
+}
+
+
+void adc_callback_state_1_set_multiplexor (int idx, int v, int up)
+{
+  // Set Multiplexor
+  uint8_t multiplexor = adc_index >> 2;
+
+  // Use this multiplexor address
+
+  adc_step_timer.begin(1).onTimer(adc_callback_state_2_set_adc_port_and_read).start();
+}
+
+void adc_callback (int idx, int v, int up)
+{
+  // Called about 32 times per second.
+
+  if (adc_index >= MAX_ADC){ 
+    adc_index = 0;
+  };
+
+  adc_step_timer.begin(0).onTimer(adc_callback_state_1_set_multiplexor).start();
+
+
+}
+
+void adc_setup (void)
+{
+
+  adc_loop_timer.begin (30) // 30 mSec is about 1000 mSec / 32
+    .onTimer (adc_callback)
+    .start();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 // -----------------------------------------------------
 // SETUP
@@ -498,12 +738,32 @@ void setup (void)
 
 void loop (void)
 {
+  
+  // Time
+  // Every one second, inc secondsSinceStart
+  static uint32_t lastMillis = 0;
+
+  if (millis() < lastMillis){
+    // We have looped around - every 49 days
+    lastMillis = millis();
+  }
+  if ((millis() - 1000) >= lastMillis){
+    secondsSinceStart++;
+  }
+
+
+
+
 
     // Run once a second.
     // sample_RPM();
 
     temperature_loop();
 
+
+
+  // Run the state machine.
+  automaton.run();
 
 }
 
