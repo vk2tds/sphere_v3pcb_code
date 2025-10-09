@@ -3,14 +3,18 @@
 /* darryl@radio-active.net.au                           */
 
 #include "everything.h"
+#include "defines.h"
+#include "hmi.h"
+
+#include <ParseCommands.h>
 
 extern ParseCommands pCmd;
-extern Status statusFactory;
-extern Status statusLive;
-extern boolean pauseSave;         // Pause saving to flash.
 
 
+extern struct Hardware h[];
+extern uint8_t h_elementcount;
 
+extern struct ADCstorage adcstorage [MAX_ADC]; 
 
 
 // Commands
@@ -29,21 +33,29 @@ extern boolean pauseSave;         // Pause saving to flash.
 // mqtt...
 //     host, port, encrypt, usernamem password, which ports, {primary|secondary|round robin}, subscriptions
 //     CLI over MQTT
+//     reporting frequency
 //
 // port... what data goes where
 // port {com1|com2|com3|usb|ethernet} {cli|mqtt|slave|hvac}
 //     serial speeds too etc
 //
-// fan
-// fan [FanNumber]
-// fan [FanNumber] pwm [0-100]
-// fan [FanNumber] {power|pwr} [1|0|on|off]
+
 //
 // led... Is this flash mode?
 //
 // power {12v|48v|supply|fans|lights} [CircuitNumber] {0|1|On|Off|flash|toggle with time}
 // 
 // serial - display serial number/MAC/firmware/compile date etc
+//
+// trace - see messages coming in on each port
+//
+// reboot period automatic
+
+// MQTT
+//
+// Send serial number, software version, software date etc
+// Send messages on change of state of objects
+// Commands to do stuff, like restart hardware, 
 
 
 
@@ -54,39 +66,26 @@ extern boolean pauseSave;         // Pause saving to flash.
 
 
 // Todo: Need to move these to setup() somehow. Not sure how :(
-struct ParseCommands::command_t commandList[] = {
+struct pcmd_command_t commandList[] = {
     // command, callback function
     "help", CmdHelp,
     "reset", CmdReset,
     "restart", CmdReset,
     "info", CmdInfo,
     "FACTORY", CmdFactory,
-    "osdp", CmdOsdp,
-    "route", CmdRoute,
-    "encrypt", CmdEncrypt,
-    "enable", CmdEnable,
-    "fake", CmdFake,
+    "stats", CmdStats,
+    "door", CmdDoor,                // Done
+    "temp", CmdTemp,                // Done
+    "power", CmdPower,
+    "ip", CmdIp,
+    "mqtt", CmdMqtt,
+    "port", CmdPort,
+    "fan", CmdFan,
     "led", CmdLed,
     "serial", CmdSerial,
-    "mask", CmdMask,
-    "card", CmdCard,
-    "stats", CmdStats,
-    "offset", CmdOffset,
+    "trace", Cmdtrace,
     "hardware", CmdHardware,
-    "address", CmdAddress,
-    "debugosdp", CmdDebugosdp,
-    "password", CmdPassword,
-    "save", CmdSave,
-    "pause", CmdPause,
-    "basic", CmdBasic,
-    "master", CmdMaster,
     "speed", CmdSpeed,
-    "output", CmdOutput,
-    "protect", CmdProtect, 
-    "show", CmdShow, 
-    "scan", CmdScan,
-    "cp", CmdCp, 
-    "inject", CmdInject,
     NULL, NULL // END OF LIST (NEEDED)
 };
 ParseCommands pCmd(commandList, 64, 12); // Constructor
@@ -111,52 +110,268 @@ bool check_if_true(int argc, char *argv[], int position)
 
 
 
-// Pause actually saving settings
-void CmdPause(int argc, char *argv[])
+
+void infoDoor (void)
 {
-  printCommand();
+  char buf[64];
+  snprintf(buf, 64, "door [Door Number] {0|lock|1|unlock|open}");
+  hmiPuts(buf, HMI_CLI);
 
-  if (argc >= 1)
-  {
-    uint8_t p = parseInt(argv[0]);
-    if (p != 0)pauseSave = true;
-    else pauseSave = false;
-
-  } else {
-    pauseSave = !pauseSave;
+  for (uint8_t i = 0; i < MAX_DOORS; i++){
+    switch (doorstorage[i].DoorState){
+        case (false):
+            snprintf (buf, 64, "door %d close", d+1);
+            hmiPuts(buf, HMI_CLI);
+            break;
+        case (true):
+            snprintf (buf, 64, "door %d open", d+1);
+            hmiPuts(buf, HMI_CLI);
+            break;
+    }
   }
+}
 
-  if (pauseSave)
-  {
+
+void CmdDoor(int argc, char *argv[])
+{
+    if (argc == 0)
+    {
+        infoDoor();
+        return;
+    }
+
+    if (argc < 2){
+        char buf[64];
+        snprintf(buf, 64, "Err: Syntax Error");
+        hmiPuts(buf, HMI_CLI);
+        return;
+    }
+
+    uint8_t dPort = parseInt(argv[0]);
+    uint8_t dooraction = parseInt(argv[1]); // parse 0 or 1
+
+    if ((dPort > MAX_DOORS) || (dPort == 0)){
+        char buf[64];
+        snprintf(buf, 64, "Err: Invalid door value");
+        hmiPuts(buf, HMI_CLI);
+        return;
+    }
+
+    if ((argv[1][0] == 'u') || (argv[1][0] == 'U')){ // Unlock
+        dooraction = 1;
+    }
+
+    if ((argv[1][0] == 'o') || (argv[1][0] == 'O')){ // Open - Not used at the moment with these locks
+        dooraction = 2;
+    }
+    door (dPort-1, dooraction);
+
+}
+
+
+
+
+
+
+void infoTemp (void)
+{
     char buf[64];
-    snprintf(buf, 64, "Saving of settings is paused");
+    snprintf(buf, 64, "temp [temp string] {temperature} {age}");
     hmiPuts(buf, HMI_CLI);
-  }
+
+    for (uint8_t i = 0; i < MAX_TEMP; i++){
+        // TODO: Printing floats
+        uint32_t diff;
+        diff = secondsSinceStart - tempstorage[i].secondsSinceStart;
+        snprintf ("temp %d %2.1f %lds", i, tenpstorage[i].temperature, diff);
+    }
 }
 
-// Test Inputs
-void CmdScan(int argc, char *argv[])
-{
-  printCommand();
-  test_inputs();
-  // never return. Ever
 
-}
-
-void CmdProtect(int argc, char *argv[])
+void CmdTemp(int argc, char *argv[])
 {
-  printCommand();
-  if (argc == 0)
-  {
-    infoProtect();
+    if (argc == 0)
+    {
+        infoTemp();
+        return;
+    }
+
+    char buf[64];
+    snprintf(buf, 64, "Err: Additional Temp Settings Not Implemented");
+    hmiPuts(buf, HMI_CLI);
     return;
-  }
 
-  uint8_t p = parseInt(argv[0]);;
-
-  settings.protect = p;
-  settings_save();
 }
+
+
+void infoPower (void)
+{
+  char buf[128];
+  snprintf(buf, 128, "power {12v|48v|supply|fans|lights} [CircuitNumber] {0|1|On|Off|flash|toggle with time} [On Time]");
+  hmiPuts(buf, HMI_CLI);
+  snprintf(buf, 128, "  - WARNING: Output SUPPLY/0 is INVERTED. ON turns the output OFF");
+  hmiPuts(buf, HMI_CLI);
+
+  char buf2[16];
+  char buf3[16];
+
+  char amp_buf[16];
+  char volt_buf[16];
+
+
+  for (uint8_t i = 0; i < h_elementcount; i++){
+      snprintf (buf2, 64,   "ERROR  ");
+      
+      if (h[i].mode == voltage_12){
+        snprintf (buf2, 64, "12v    ");
+      }
+      if (h[i].mode == voltage_48){
+        snprintf (buf2, 64, "48v    ");
+      }
+      if (h[i].mode == voltage_supply){
+        snprintf (buf2, 64, "supply ");
+      }
+      if (h[i].mode == voltage_fans){
+        snprintf (buf2, 64, "fans   ");
+      }
+      if (h[i].mode == voltage_lights){
+        snprintf (buf2, 64, "lights ");
+      }
+
+      snprintf (buf3, 16, "ALWAYS ON ");
+      if (h[i].power_pin != NO_PIN){
+      if (digitalRead (h[i].power_pin)){
+        snprintf (buf3, 16, "on       ");
+      } else {
+        snprintf (buf3, 16, "off      ");
+      }
+
+      snprintf (amp_buf, 16, "       ");
+      snprintf (volt_buf, 16, "       ");
+
+      if (h[i].current_adc_address != INVALID_ADC_ADDRESS){
+        snprintf (amp_buf, 16, "%2.3fA", adcstorage[h[i].current_adc_address]);
+      }
+
+      if (h[i].voltage_adc_address != INVALID_ADC_ADDRESS){
+        snprintf (amp_buf, 16, "%2.2f V", adcstorage[h[i].current_adc_address]);
+      }
+
+      snprintf (buf, 128, "%s %02d %s %s %s", buf2, h[i].index, buf3, amp_buf, volt_buf);
+      hmiPuts(buf, HMI_CLI);
+  }
+}
+
+
+//  char *command_line = "power {12v|48v|supply|fans|lights} [CircuitNumber] {0|1|On|Off|flash|toggle with time} [On Time]";
+
+
+void CmdPower(int argc, char *argv[])
+{
+    if (argc == 0)
+    {
+        infoPower();
+        return;
+    }
+
+    if (argc < 3){
+        char buf[64];
+        snprintf(buf, 64, "Err: Syntax Error");
+        hmiPuts(buf, HMI_CLI);
+        return;
+    }
+
+    uint8_t mode;
+
+    if (strcasecmp (argv[1], "12v") == 0){
+      mode = voltage_12;
+    }
+    if (strcasecmp (argv[1], "48v") == 0){
+      mode = voltage_48;
+    }
+    if (strcasecmp (argv[1], "supply") == 0){
+      mode = voltage_supply;
+    }
+    if (strcasecmp (argv[1], "fans") == 0){
+      mode = voltage_fans;
+    }
+    if (strcasecmp (argv[1], "lights") == 0){
+      mode = voltage_lights;
+    }
+
+    uint8_t circuit = parseInt (argv[2]);
+
+    uint8_t state = parseInt (argv[3]); // Picks up 1 & 0
+
+    if (strcasecmp (argv[3], "on") == 0){
+      state = 1;
+    }
+
+    if (strcasecmp (argv[3], "pulse") == 0){
+      state = 2;
+    }
+
+    if (strcasecmp (argv[3], "flash") == 0){
+      state = 3;
+    }
+
+    if (state >1){
+      if (argc < 3){
+        char buf[64];
+        snprintf(buf, 64, "Err: Syntax Error");
+        hmiPuts(buf, HMI_CLI);
+        return;
+      }
+    }
+
+    for (uint8_t i = 0; i < h_elementcount; i++){
+      if ((h[i].mode == mode) && (h[i].index == circuit)){
+        if (state == 0) digitalWrite (h[i].power_pin, false);
+        if (state == 1) digitalWrite (h[i].power_pin, true);
+        if (state > 1){
+          char buf[64];
+          snprintf(buf, 64, "Err: Output not found");
+          hmiPuts(buf, HMI_CLI);
+          return;
+        }
+        return;
+      }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// -------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 void infoCp_print_wiegand (uint8_t w_port, uint8_t state)
@@ -221,100 +436,8 @@ void infoCp_print_wiegand (uint8_t w_port, uint8_t state)
 }
 
 
-void infoCp_print_osdp (uint8_t o_port)
-{
-    char buf[64];
-
-  // CP OSDP    [OSDP PORT] ADDRESS [OSDP ADDRESS] - All ArgC == 4
-  // CP OSDP    [OSDP PORT] WIEGAND [WIEGAND PORT]
-  // CP OSDP    [OSDP PORT] ENCRYPTION xxx
 
 
-   snprintf(buf, 64, "CP OSDP %d ENCRYPT %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x", o_port + 1,
-             settings.cp_osdp_scbk[o_port][0],
-             settings.cp_osdp_scbk[o_port][1],
-             settings.cp_osdp_scbk[o_port][1],
-             settings.cp_osdp_scbk[o_port][2],
-             settings.cp_osdp_scbk[o_port][3],
-             settings.cp_osdp_scbk[o_port][4],
-             settings.cp_osdp_scbk[o_port][5],
-             settings.cp_osdp_scbk[o_port][6],
-             settings.cp_osdp_scbk[o_port][7],
-             settings.cp_osdp_scbk[o_port][8],
-             settings.cp_osdp_scbk[o_port][9],
-             settings.cp_osdp_scbk[o_port][10],
-             settings.cp_osdp_scbk[o_port][11],
-             settings.cp_osdp_scbk[o_port][12],
-             settings.cp_osdp_scbk[o_port][13],
-             settings.cp_osdp_scbk[o_port][14],
-             settings.cp_osdp_scbk[o_port][15]);
-    hmiPuts(buf, HMI_CLI);
-
-
-  snprintf (buf, 64, "CP OSDP %d ADDRESS %d", o_port + 1, settings.cp_osdp_address[o_port] );
-  hmiPuts (buf, HMI_CLI);
-
-  snprintf (buf, 64, "CP OSDP %d WIEGAND %d", o_port + 1, settings.cp_osdp_wiegand[o_port] + 1);
-  hmiPuts (buf, HMI_CLI);
-
-
-  if (settings.cp_osdp_secure[o_port])
-  {
-    snprintf (buf, 64, "CP OSDP %d SECURE TRUE ", o_port + 1);
-    hmiPuts (buf, HMI_CLI);
-  } else {
-    snprintf (buf, 64, "CP OSDP %d SECURE FALSE", o_port + 1);
-    hmiPuts (buf, HMI_CLI);
-  }
-
-  if (settings.cp_osdp_install[o_port])
-  {
-    snprintf (buf, 64, "CP OSDP %d INSTALL TRUE ", o_port + 1);
-    hmiPuts (buf, HMI_CLI);
-  } else {
-    snprintf (buf, 64, "CP OSDP %d INSTALL FALSE", o_port = 1);
-    hmiPuts (buf, HMI_CLI);
-  }
-
-  if (settings.cp_osdp_enabled[o_port])
-  {
-    snprintf (buf, 64, "CP OSDP %d ENABLE TRUE ", o_port + 1);
-    hmiPuts (buf, HMI_CLI);
-  } else {
-    snprintf (buf, 64, "CP OSDP %d ENABLE FALSE", o_port + 1);
-    hmiPuts (buf, HMI_CLI);
-  }
-
-}
-
-void infoCp()
-{
-
-  char buf[64];
-
-  for (uint8_t w_port = 0; w_port < OSDP_MAX_WIEGAND_COUNT; w_port++)
-  {
-    for (uint8_t state = 0; state < 2; state++)
-    {
-      infoCp_print_wiegand (w_port, state);
-    }
-  }
-  for (uint8_t o_port = 0; o_port < OSDP_MAX_CP; o_port++)
-  {
-    infoCp_print_osdp(o_port);
-  }
-
-  // This MUST be last...
-  if (settings.mode_cp)
-  {
-    snprintf (buf, 64, "CP MODE TRUE");
-  } else {
-    snprintf (buf, 64, "CP MODE FALSE");
-  }
-  hmiPuts (buf, HMI_CLI);
-
-
-}
 
 
 void CmdCp(int argc, char *argv[])
@@ -478,9 +601,9 @@ void CmdCp(int argc, char *argv[])
         return;
       }
       count = parseInt (argv[7]);
-      settings.cp_buz_temp_time_on[wPort-1][highlow] =  on_time;
-      settings.cp_buz_temp_time_off[wPort-1][highlow] = off_time;
-      settings.cp_buz_temp_count[wPort-1][highlow] = count;
+      // settings.cp_buz_temp_time_on[wPort-1][highlow] =  on_time;
+      // settings.cp_buz_temp_time_off[wPort-1][highlow] = off_time;
+      // settings.cp_buz_temp_count[wPort-1][highlow] = count;
 
       settings_save();
       return;
@@ -495,11 +618,11 @@ void CmdCp(int argc, char *argv[])
         }
         on_color = parseInt(argv[7]);
         off_color = parseInt(argv[8]);
-        settings.cp_led_perm_time_on[wPort-1][highlow] =  on_time;
-        settings.cp_led_perm_time_off[wPort-1][highlow] = off_time;
-        settings.cp_led_perm_color_on[wPort-1][highlow] =  on_color;
-        settings.cp_led_perm_color_off[wPort-1][highlow] = off_color;
-        settings_save();
+        // settings.cp_led_perm_time_on[wPort-1][highlow] =  on_time;
+        // settings.cp_led_perm_time_off[wPort-1][highlow] = off_time;
+        // settings.cp_led_perm_color_on[wPort-1][highlow] =  on_color;
+        // settings.cp_led_perm_color_off[wPort-1][highlow] = off_color;
+        // settings_save();
         return;
       } else { // Temporary Setting
         if (argc < 10){
@@ -511,12 +634,12 @@ void CmdCp(int argc, char *argv[])
         count = parseInt (argv[7]);
         on_color = parseInt(argv[8]);
         off_color = parseInt(argv[9]);
-        settings.cp_led_temp_time_on[wPort-1][highlow] =  on_time;
-        settings.cp_led_temp_time_off[wPort-1][highlow] = off_time;
-        settings.cp_led_temp_color_on[wPort-1][highlow] =  on_color;
-        settings.cp_led_temp_color_off[wPort-1][highlow] = off_color;
-        settings.cp_led_temp_count[wPort-1][highlow] = count;
-        settings_save();
+        // settings.cp_led_temp_time_on[wPort-1][highlow] =  on_time;
+        // settings.cp_led_temp_time_off[wPort-1][highlow] = off_time;
+        // settings.cp_led_temp_color_on[wPort-1][highlow] =  on_color;
+        // settings.cp_led_temp_color_off[wPort-1][highlow] = off_color;
+        // settings.cp_led_temp_count[wPort-1][highlow] = count;
+        // settings_save();
         return;
       }
 
@@ -566,8 +689,8 @@ void CmdCp(int argc, char *argv[])
     if ((argv[2][0] == 'A') | (argv[2][0] == 'a')) // Address
     {
       uint8_t address = parseInt (argv[3]);
-      settings.cp_osdp_address[oPort-1] = address;
-      settings_save();
+      // settings.cp_osdp_address[oPort-1] = address;
+      // settings_save();
       return;
     } // Address
     if ((argv[2][0] == 'W') | (argv[2][0] == 'w')) // Wiegand Port
@@ -827,23 +950,9 @@ void infoSpeed(void)
   hmiPuts(buf, HMI_CLI);
 }
 
-void infoProtect(void)
-{
-  char buf[64];
-  snprintf (buf, 64, "protect %d", settings.protect);
-  hmiPuts(buf, HMI_CLI);
-}
 
 
 
-void CmdSave(int argc, char *argv[])
-{
-  printCommand();
-  if (!checkPassword())
-    return; // Console locked
-
-  settings_save();
-}
 
 
 
@@ -884,8 +993,6 @@ void CmdFactory(int argc, char *argv[])
   snprintf(buf, 64, "Resetting to factory settings");
   hmiPuts(buf, HMI_CLI);
 
-  initStatus(&statusFactory);
-  initStatus(&statusLive);
   settings_destroy();
   CmdReset(0, NULL);
 }
@@ -920,35 +1027,7 @@ void CmdStats(int argc, char *argv[])
   infoStatus();
 }
 
-void CmdCard(int argc, char *argv[])
-{
-  printCommand();
 
-  if (!checkPassword())
-    return; // Console locked
-
-  if (argc == 0)
-  {
-    infoFake(); // Calls fake instead of Card.
-    return;
-  }
-  if (argc >= 1)
-  {
-    int8_t oPort = parseInt(argv[0]);
-    if ((oPort == 0) || (oPort > OSDP_MAX_WIEGAND_COUNT))
-    {
-      char buf[64];
-      snprintf(buf, 64, "Err: Wiegand Port is bad");
-      hmiPuts(buf, HMI_CLI);
-      return;
-    }
-    card(oPort - 1);
-    return;
-  }
-  char buf[64];
-  snprintf(buf, 64, "Err: Syntax Error");
-  hmiPuts(buf, HMI_CLI);
-}
 
 void CmdRoute(int argc, char *argv[])
 {
@@ -1067,69 +1146,7 @@ void infoSerial(void)
   hmiPuts(buf, HMI_CLI);
 }
 
-void infoOffset(void)
-{
-  for (uint8_t i = 0; i < OSDP_MAX_WIEGAND_COUNT; i++)
-  {
-    uint8_t bytes = 0;
-    switch (settings.fake_cards_bits[i])
-    {
-    case 26:
-      bytes = 4;
-      break;
-    case 34:
-      bytes = 5;
-      break;
-    default:
-      bytes = 5;
-    }
 
-    char buf[64];
-    char buf2[32];
-
-    snprintf(buf, 64, "offset %d ", i + 1);
-
-    for (uint8_t j = 0; j < bytes; j++)
-    {
-      snprintf(buf2, 32, "%02x", settings.offset_cards[i][j]);
-      safe_strcat(buf, buf2, 64);
-    }
-    snprintf(buf2, 32, " %d", settings.offset_cards_bits[i]);
-    safe_strcat(buf, buf2, 64);
-    hmiPuts(buf, HMI_CLI);
-  }
-}
-
-void infoFake(void)
-{
-  char buf[64];
-  char buf2[32];
-
-  for (uint8_t i = 0; i < OSDP_MAX_WIEGAND_COUNT; i++)
-  {
-    uint8_t bytes = 0;
-    switch (settings.fake_cards_bits[i])
-    {
-    case 26:
-      bytes = 4;
-      break;
-    case 34:
-      bytes = 5;
-      break;
-    default:
-      bytes = 5;
-    }
-    snprintf(buf, 64, "fake %d ", i + 1);
-    for (uint8_t j = 0; j < bytes; j++)
-    {
-      snprintf(buf2, 32, "%02x", settings.fake_cards[i][j]);
-      safe_strcat(buf, buf2, 64);
-    }
-    snprintf(buf2, 32, " %d", settings.fake_cards_bits[i]);
-    safe_strcat(buf, buf2, 64);
-    hmiPuts(buf, HMI_CLI);
-  }
-}
 
 
 void infoOutput (void)
@@ -1152,51 +1169,6 @@ void infoOutput (void)
 
 
 
-void infoOsdp(void)
-{
-  char buf[64];
-  snprintf(buf, 64, "osdp port address");
-  hmiPuts(buf, HMI_CLI);
-
-  for (uint8_t i = 0; i < OSDP_MAX_OSDP_COUNT; i++)
-  {
-    bool encrypt = false;
-    for (uint8_t j = 0; j < 16; j++)
-    {
-      if (settings.scbk[i][j] != (0x30 + j))
-      {
-        encrypt = true;
-      }
-    }
-
-    if (encrypt)
-    {
-      if (settings.enable_osdp[i])
-      {
-        snprintf(buf, 64, "osdp %d %d encrypted", i + 1, settings.osdp_address[i]);
-        hmiPuts(buf, HMI_CLI);
-      }
-      else
-      {
-        snprintf(buf, 64, "osdp %d %d encrypted disabled", i + 1, settings.osdp_address[i]);
-        hmiPuts(buf, HMI_CLI);
-      }
-    }
-    else
-    {
-      if (settings.enable_osdp[i])
-      {
-        snprintf(buf, 64, "osdp %d %d default", i + 1, settings.osdp_address[i]);
-        hmiPuts(buf, HMI_CLI);
-      }
-      else
-      {
-        snprintf(buf, 64, "osdp %d %d default disabled", i + 1, settings.osdp_address[i]);
-        hmiPuts(buf, HMI_CLI);
-      }
-    }
-  }
-}
 
 void CmdInfo(int argc, char *argv[])
 {
@@ -1235,9 +1207,193 @@ void CmdReset(int argc, char *argv[])
   NVIC_SystemReset();
 }
 
+// void infoHardware()
+// {
+//   char buf[64];
+//   char buf2[64];
+//   snprintf(buf, 64, "Hardware Status");
+//   hmiPuts(buf, HMI_CLI);
+
+//   for (uint8_t i = 0; i < OSDP_MAX_WIEGAND_COUNT; i++)
+//   {
+//     if (pins[i][0] != NONE)
+//     {
+//       snprintf(buf, 64, "wiegand %02d %d %d %d %d %d", i + 1,
+//                digitalRead(pins[i][0]),
+//                digitalRead(pins[i][1]),
+//                digitalRead(pins[i][2]),
+//                digitalRead(pins[i][3]),
+//                digitalRead(pins[i][4]));
+//       hmiPuts(buf, HMI_CLI);
+//     }
+//     else
+//     {
+//       snprintf(buf, 64, "wiegand %02d - - - - -", i + 1);
+//       hmiPuts(buf, HMI_CLI);
+//     }
+//   }
+// }
+
+// void CmdHardware(int argc, char *argv[])
+// {
+//   // hardware wiegand port pin state
+//   //     -1      0      1   2    3
+//   printCommand();
+//   if (!checkPassword())
+//     return; // Console locked
+
+//   // hardware osdp 1 2 1
+//   // hardware oddp 1 3 1
+
+//   if (argc == 0)
+//   {
+//     infoHardware();
+//     return;
+//   }
+
+//   if (argc >= 3)
+//   {
+//     uint8_t oPort = parseInt(argv[1]);
+//     uint8_t oPin = parseInt(argv[2]);
+//     uint8_t mode = MODE_NONE;
+
+//     if (strcmp(argv[0], "wiegand") == 0)
+//       mode = MODE_WIEGAND;
+//     // if (strcmp(argv[0], "osdp") == 0)
+//     //   mode = MODE_OSDP;
+
+//     if (mode == MODE_NONE)
+//     {
+//       char buf[64];
+//       snprintf(buf, 64, "Err: Syntax Error");
+//       hmiPuts(buf, HMI_CLI);
+//       return;
+//     }
+
+//     if (oPort == 0)
+//     {
+//       char buf[64];
+//       snprintf(buf, 64, "Err: Port is bad");
+//       hmiPuts(buf, HMI_CLI);
+//     }
+
+//     if (oPin >= 5)
+//     {
+//       char buf[64];
+//       snprintf(buf, 64, "Err: Pin is bad");
+//       hmiPuts(buf, HMI_CLI);
+//     }
+
+//     switch (mode)
+//     {
+//     case MODE_WIEGAND:
+//       if (oPort > OSDP_MAX_WIEGAND_COUNT)
+//       {
+//         char buf[64];
+//         snprintf(buf, 64, "Err: Port too big");
+//         hmiPuts(buf, HMI_CLI);
+
+//         return;
+//       }
+//       break;
+//     }
+
+//     bool state = false;
+//     if (check_if_true(argc, argv, 3))
+//     //if ((argv[3][0] == '1') || (argv[3][0] == 't') || (argv[3][0] == 'T'))
+//     {
+//       state = true;
+//     }
+//     switch (mode)
+//     {
+//     case MODE_WIEGAND:
+//       switch (oPin)
+//       {
+//       case 0:
+//         break;
+//       case 1:
+//         break;
+//       case 2:
+//         if (state)
+//         {
+//           reader[oPort - 1].LED_perm.blink(1000, 0).start();
+//           reader[oPort - 1].LED_temp.blink(1000, 0).start();
+//         }
+//         else
+//         {
+//           reader[oPort - 1].LED_perm.trigger(reader[oPort - 1].LED_temp.EVT_OFF);
+//         }
+//         break;
+//       case 3:
+//         if (state)
+//         {
+//           reader[oPort - 1].buzzer.blink(1000, 0).start();
+//         }
+//         else
+//         {
+//           reader[oPort - 1].buzzer.trigger(reader[oPort - 1].buzzer.EVT_OFF);
+//         }
+//         break;
+//       case 4:
+//         break;
+//       }
+
+//       break;
+//     }
+//     return;
+//   }
+//   char buf[64];
+//   snprintf(buf, 64, "Err: Syntax Error");
+//   hmiPuts(buf, HMI_CLI);
+// }
 
 
-void printhelp(char *command, char *text, uint16_t values, uint8_t warning, uint8_t action)
+
+
+
+
+// Commands
+//
+//
+// ip...
+//     DHCP, IP, Mask, Gateway, DNS1/2
+//
+// mqtt...
+//     host, port, encrypt, usernamem password, which ports, {primary|secondary|round robin}, subscriptions
+//     CLI over MQTT
+//     reporting frequency
+//
+// port... what data goes where
+// port {com1|com2|com3|usb|ethernet} {cli|mqtt|slave|hvac}
+//     serial speeds too etc
+//
+//
+// led... Is this flash mode?
+//
+// 
+// serial - display serial number/MAC/firmware/compile date etc
+//
+// trace - see messages coming in on each port
+//
+// reboot period automatic
+
+// MQTT
+//
+// Send serial number, software version, software date etc
+// Send messages on change of state of objects
+// Commands to do stuff, like restart hardware, 
+//
+// Amps and Voltage????
+
+
+
+#define HELP_VALUE_DOOR 1
+#define HELP_VALUE_TEMP 2
+
+
+
+
+void printhelp(char *command, char *text, uint16_t values, uint8_t warning)
 {
   char buf[256];
   char buf2[256];
@@ -1263,14 +1419,14 @@ void printhelp(char *command, char *text, uint16_t values, uint8_t warning, uint
 // | 64 RFID Card Number                  | 8 Hex Digits  | 10 Hex Digits | 22015993D5C1                      |
 // | 128 On Time and Off Time              | 0             | 255           | 5 = 0.5 Seconds; 12 = 1.2 Seconds |
 
-  if (values & VALUE_OSDP_PORT_PD)
+  if (values & HELP_VALUE_DOOR)
   {
-    snprintf (buf2, 256, " - [PD OSDP PORT] - 1-8");
+    snprintf (buf2, 256, " - [Door Number] - 1-MAX_DOORS");
     hmiPuts(buf2, HMI_CLI);
   }
-  if (values & VALUE_OSDP_PORT_CP)
+  if (values & HELP_VALUE_TEMP)
   {
-    snprintf (buf2, 256, " - [CP OSDP PORT] - 1-8");
+    snprintf (buf2, 256, " - [Temperature Port] - 1-MAX_TEMP");
     hmiPuts(buf2, HMI_CLI);
   }
   if (values & VALUE_OSDP_ADDRESS)
@@ -1288,21 +1444,6 @@ void printhelp(char *command, char *text, uint16_t values, uint8_t warning, uint
     snprintf (buf2, 256, " - [Wiegand Port] - 1-8");
     hmiPuts(buf2, HMI_CLI);
   }
-  if (values & VALUE_ENCRYPTION)
-  {
-    snprintf (buf2, 256, " - [Encryption Key] - 32 Hex Digits - 00000000000000000000000000000000-FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
-    hmiPuts(buf2, HMI_CLI);
-  }
-  if (values & VALUE_RFID_CARD)
-  {
-    snprintf (buf2, 256, " - [RFID Card Number] - 10 Hex Digits - 0000000000-FFFFFFFFF");
-    hmiPuts(buf2, HMI_CLI);
-  }
-  if (values & VALUE_ON_OFF_TIME)
-  {
-    snprintf (buf2, 256, " - [On Time and Off Time] - 0-255 - 255 = 25.5 Seconds. ");
-    hmiPuts(buf2, HMI_CLI);
-  }
   if (values & VALUE_TRUE)
   {
     snprintf (buf2, 256, " - [state] - The state may be 1, 0, true or false, yes or no");
@@ -1314,20 +1455,6 @@ void printhelp(char *command, char *text, uint16_t values, uint8_t warning, uint
     hmiPuts(buf2, HMI_CLI);
   }
 
-  switch (action)
-  {
-    case MODE_CP:
-      snprintf (buf2, 256, " - Applies to Control Panel (CP) mode only");
-      hmiPuts(buf2, HMI_CLI);
-      break;
-    case MODE_PD:
-      snprintf (buf2, 256, " - Applies to Peripheral Device (PD) mode only");
-      hmiPuts(buf2, HMI_CLI);
-      break;
-    case MODE_PD | MODE_CP:
-      snprintf (buf2, 256, " - Applies to Peripheral Device (PD) and Control Panel (CP) modes");
-      break;
-  }
 
   if (warning & 0x01)
   {
@@ -1347,71 +1474,73 @@ void CmdHelp(int argc, char *argv[])
 
   if (argc >= 1)
   {
-    if (strcasecmp ("xyzzy", argv[0]) == 0)
+
+    if (strcasecmp ("door", argv[0]) == 0)
     {
-      char *command_line = "Xyzzy";
-      char *command_help = "Nothing happens. Try Y2.";
-      uint16_t values = 0;
+      char *command_line = "door [Door] [DoorState]... ";
+      char *command_help = "Unlock, Lock or Open a door";
       uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
+      uint16_t values = HELP_VALUE_DOOR;
+      printhelp (command_line, command_help, values, warning);
       return;
     }
+
+    if (strcasecmp ("temp", argv[0]) == 0)
+    {
+      char *command_line = "temp mode [Temp String]\r\n"
+                            "temp alarm [Temp String] xxxxxxx";
+      char *command_help = "Unlock, Lock or Open a door";
+      uint8_t warning = 0;
+      uint16_t values = HELP_VALUE_TEMP;
+      printhelp (command_line, command_help, values, warning);
+      return;
+    }
+
+    if (strcasecmp ("power", argv[0]) == 0)
+    {
+      char *command_line = "power {12v|48v|supply|fans|lights} [CircuitNumber] {0|1|On|Off|flash|toggle with time} [On Time]";
+      char *command_help = "Turn on a circuit on and off";
+      uint8_t warning = 0;
+      uint16_t values = CIRCUIT_TYPE | CIRCUIT NUMBER | ON_TIME;
+      printhelp (command_line, command_help, values, warning);
+      return;
+    }
+
+    if (strcasecmp ("fan", argv[0]) == 0)
+    {
+      char *command_line = "fan [Fan Number] pwm [PWM Value]\r\n"
+                           "fam {pwr|power} [Fan State]";
+      char *command_help = "Turn on a circuit on and off";
+      uint8_t warning = 0;
+      uint16_t values = FAN_NUMBER | FAN_STATE | PWR_VALUE];
+      printhelp (command_line, command_help, values, warning);
+      return;
+    }
+    
+
+
+
+// fan
+// fan [FanNumber]
+// fan [FanNumber] pwm [0-100]
+// fan [FanNumber] {power|pwr} [1|0|on|off] - clone on power
+
+
+
+
+
 
     if (strcasecmp ("reset", argv[0]) == 0)
     {
       char *command_line = "reset";
       char *command_help = "This command simply causes the device to restart as if it was power cycled.";
       uint8_t warning = 1;
-      uint16_t values = 1;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
+      uint16_t values = 0;
+      printhelp (command_line, command_help, values, warning);
       return;
     }
 
-    if (strcasecmp ("serial", argv[0]) == 0)
-    {
-      char *command_line = "serial";
-      char *command_help = "Display the serial number of the device";
-      uint8_t warning = 0;
-      uint16_t values = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
-    if (strcasecmp ("address", argv[0]) == 0)
-    {
-      char *command_line = "address";
-      char *command_help = "Display OSDP serial numbers for each port";
-      uint8_t warning = 0;
-      uint16_t values = 0;
-      uint8_t action = MODE_PD; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("basic", argv[0]) == 0)
-    {
-      char *command_line = "basic";
-      char *command_help = "Set some basic settings to make it easier to configure the device.";
-      uint8_t warning = 0;
-      uint16_t values = 0;
-      uint8_t action = MODE_PD; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("pause", argv[0]) == 0)
-    {
-      char *command_line = "pause";
-      char *command_help = "This command pauses saving any settings into memory until the command is issued again.";
-      uint8_t warning = 0;
-      uint16_t values = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
     if (strcasecmp ("info", argv[0]) == 0)
     {
@@ -1419,38 +1548,15 @@ void CmdHelp(int argc, char *argv[])
       char *command_help = "Return the value of all settings.";
       uint8_t warning = 0;
       uint16_t values = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
+      printhelp (command_line, command_help, values, warning);
       return;
     }
 
-    if (strcasecmp ("save", argv[0]) == 0)
-    {
-      char *command_line = "save";
-      char *command_help = "Saves all commands to memory when in pause mode. Can be used in scripts just in case.";
-      uint8_t warning = 0;
-      uint16_t values = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
     if (strcasecmp ("stats", argv[0]) == 0)
     {
       char *command_line = "stats";
       char *command_help = "Display verious system statistics";
-      uint8_t warning = 0;
-      uint16_t values = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("show", argv[0]) == 0)
-    {
-      char *command_line = "show";
-      char *command_help = "Display the last few Wiegand card reads, along with the port and the age. The `ago` number\r\n"
-                           "is the approximate number of seconds since the card was read. ";
       uint8_t warning = 0;
       uint16_t values = 0;
       uint8_t action = MODE_PD | MODE_CP; 
@@ -1469,33 +1575,8 @@ void CmdHelp(int argc, char *argv[])
       return;
     }
 
-    if (strcasecmp ("password", argv[0]) == 0)
-    {
-      char *command_line = "password\r\n"
-                            "password [Password]\r\n"
-                            "password set [New Password | Blank | Serial]";
-      char *command_help = "Typed by itself, this commands locks the console. \r\n"
-                            "To unlock the console, type the command 'password' followed by the actual password\r\n"
-                            "To set the password, tyoe 'password set' followed by the new password. To remove the password type 'password set blank'. "
-                            "To set the password to the unit serial number type 'password set serial'";
-      uint8_t warning = 0;
-      uint16_t values = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
 
-    if (strcasecmp ("mask", argv[0]) == 0)
-    {
-      char *command_line = "mask";
-      char *command_help = "The on board LED has a number of modes. Mode 0 has the led changing state as the main loop executes. In mode 2 the LED toggles in response to OSDP transmissions. Mode 3 momentarily flashes the LED in line with Wiegand output.";
-      uint16_t values = 0;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
     if (strcasecmp ("speed", argv[0]) == 0)
     {
@@ -1509,16 +1590,6 @@ void CmdHelp(int argc, char *argv[])
     }
 
 
-    if (strcasecmp ("osdp", argv[0]) == 0)
-    {
-      char *command_line = "osdp [PD OSDP Port] [OSDP Address]";
-      char *command_help = "This device contains a number of OSDP interfaces. This command without any parameters will\r\nprint the OSDP address for each port";
-      uint16_t values = VALUE_OSDP_PORT_PD | VALUE_OSDP_ADDRESS;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
     if (strcasecmp ("route", argv[0]) == 0)
     {
@@ -1532,68 +1603,6 @@ void CmdHelp(int argc, char *argv[])
       return;
     }
 
-    if (strcasecmp ("encrypt", argv[0]) == 0)
-    {
-      char *command_line = "encrypt [PD OSDP Port] [Encryption Key]";
-      char *command_help = "Set the encryption key for each OSDP port. Absolutely the worst is using the default encryption \r\n"
-                            "key of '303132333435363738393A3B3C3D3E3F'. This key is often used to initially lock the device \r\n"
-                            "before the Control Panel sends a new encryption key to the device. Some Control Panels will provide\r\n"
-                            "the encryption key to the user, and it will be their responsibility to transfer it onto a Periheperal\r\n"
-                            "Device. This command assists in that regard";
-      uint16_t values = VALUE_OSDP_PORT_PD | VALUE_ENCRYPTION;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("enable", argv[0]) == 0)
-    {
-      char *command_line =  "enable [Wiegand|led|buzzer|relay] [Wiegand Port] [state]\r\n"
-                            "enable [osdp|install|secure]      [PD OSDP Port] [state]";
-      char *command_help = "Enable and disable Wiegand, LED, Buzzer, Relay and OSDP ports, as well as install and secure modes on OSDP ports\r\n"
-                            "OSDP Port commands only operate in Peripheral Mode";
-      uint16_t values = VALUE_WIEGAND_PORT | VALUE_OSDP_PORT_PD | VALUE_TRUE;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("fake", argv[0]) == 0)
-    {
-      char *command_line = "fake [Wiegand Port] [RFID Card Number]";
-      char *command_help = "Set a fake card for each Wiegand port to be sent on button press";
-      uint16_t values = VALUE_WIEGAND_PORT | VALUE_RFID_CARD;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("inject", argv[0]) == 0)
-    {
-      char *command_line = "inject [Wiegand Port] [RFID Card Number]";
-      char *command_help = "Inject RFID from the command line as if it was sent by an actual card reader. It works on an OSDP \r\n"
-                            "port. The Card number needs to be eight or ten hex digits long. This command can be used to integrate\r\n"
-                            "other hardware to the alarm system.";
-      uint16_t values = VALUE_WIEGAND_PORT | VALUE_RFID_CARD;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("master", argv[0]) == 0)
-    {
-      char *command_line = "master [RFID Card Number]";
-      char *command_help = "Set an RFID Card Number to unlock the console instead of a password. ";
-      uint16_t values = VALUE_RFID_CARD;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
     if (strcasecmp ("led", argv[0]) == 0)
     {
@@ -1608,66 +1617,8 @@ void CmdHelp(int argc, char *argv[])
       return;
     }
 
-    if (strcasecmp ("card", argv[0]) == 0)
-    {
-      char *command_line = "card [Wiegand Port]";
-      char *command_help = "As noted by the 'fake' command, it is possible to send a preset card read to the Control Panel when a button\r\n"
-                            "is pressed. For testing, the 'card' command has been created to emulate that button being pressed. It can be\r\n"
-                            "used on any of the Wiegand ports.";
-      uint16_t values = VALUE_WIEGAND_PORT;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
-    if (strcasecmp ("offset", argv[0]) == 0)
-    {
-      char *command_line = "offset [Wiegand Port] [RFID Card Number]`";
-      char *command_help = "Modify Wiegand RFID reads such algorithmicly. This us useful when combining multiple Wiegand ports to a single OSDP port";
-      uint16_t values = VALUE_WIEGAND_PORT | VALUE_RFID_CARD;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
-    if (strcasecmp ("output", argv[0]) == 0)
-    {
-      char *command_line =  "enable [PD OSDP Port] [Wiegand Port]";
-      char *command_help = "Route OSDP port card reads to the specified Wiegand Port as an output. Set the Wiegand Port to 0 to disable";
-      uint16_t values = VALUE_WIEGAND_PORT | VALUE_OSDP_PORT_PD;
-      uint8_t warning = 2;
-      uint8_t action = MODE_PD; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("protect", argv[0]) == 0)
-    {
-      char *command_line =  "protect [state]\r\n";
-      char *command_help = "By default, very little information is shown on the serial console unless the user has entered a password. By \r\n"
-      "setting `protect 0`, all status information will be displayed even if the console is locked. A warning, however, is that the console\r\n"
-      "has the potential to leak information that could be used to bypass security.";
-      uint16_t values = VALUE_TRUE;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
-
-    if (strcasecmp ("debugosdp", argv[0]) == 0)
-    {
-      char *command_line =  "debugosdp [PD OSDP Port | CP OSDP PORT] [Flags]";
-      char *command_help = "It provides low level debugging of the communications between the control panel and the board. Debugging is \r\non a per OSDP port basis."
-            "Flags get added up to the value needed. 1 = Data Trace. 2 = Packet Trace. \r\n4 = Monitor POLL packets. 128 for debug of LED and BUZZER. To disable,"
-            "use a Flag value \r\nof 0. This may need to be sent without seeing your text on the screen.";
-      uint16_t values = VALUE_OSDP_PORT_CP | VALUE_OSDP_PORT_PD;
-      uint8_t warning = 0;
-      uint8_t action = MODE_PD | MODE_CP; 
-      printhelp (command_line, command_help, values, warning, action);
-      return;
-    }
 
     if (strcasecmp ("cp", argv[0]) == 0)
     {
@@ -1698,35 +1649,18 @@ void CmdHelp(int argc, char *argv[])
     "### System Commands",
     "reset        - restart the device",
     "FACTORY      - reset to factory settings",
-    "serial       - display the hardware serial number",
-    "speed        - adjust the OSDP speed",
-    "password     - enter or change the password",
     " ",
-    "### Controp Commands",
-    "basic        - apply sample settings to make it easier to get up and running",
-    "pause        - toggle auto-save of settings",
-    "save         - save settings when auto-save is paused",
+    "### Control Commands",
+    "door         - Unlock, Lock or Open a door",
+    "temp         - Temperature functions",
+    "power        - Turn circuits on and off",
+    "fan          - Control the cooling fans",
     "info         - display all settings",
     "stats        - display system statistics",
     "help         - display help on individual commands",
     "led          - change the meaning of the on board LED",
+    "speed        - adjust the comms speed",
     " ",
-    "### OSDP Commands",
-    "osdp         - set the OSDP address for each port",
-    "route        - route Wiegand readers to OSDP ports",
-    "encrypt      - set the OSDP encryption on each port",
-    "enable       - enable and disable OSDP, Wiegand, LED, Buzzer and relay ports",
-    "debugosdp    - enable low level debugging",
-    "mask         - display the status of the OSDP connections",
-    "address      - display addresses for each OSDP connection",
-    " ",
-    "### Wiegand Commands",
-    "fake         - assign a fake RFID card to each port",
-    "info         - display recent RFID card reads",
-    "card         - send an RFID card as if it was read directly",
-    " ",
-    "### CP Commands",
-    "cp           - CP related commands. Also enter and exit CP mode",
     "\0"
   };
 
@@ -1735,147 +1669,5 @@ void CmdHelp(int argc, char *argv[])
     hmiPuts (cmds[i], HMI_CLI);
   }
 
-
-
-
 }
 
-void infoHardware()
-{
-  char buf[64];
-  char buf2[64];
-  snprintf(buf, 64, "Hardware Status");
-  hmiPuts(buf, HMI_CLI);
-
-  for (uint8_t i = 0; i < OSDP_MAX_WIEGAND_COUNT; i++)
-  {
-    if (pins[i][0] != NONE)
-    {
-      snprintf(buf, 64, "wiegand %02d %d %d %d %d %d", i + 1,
-               digitalRead(pins[i][0]),
-               digitalRead(pins[i][1]),
-               digitalRead(pins[i][2]),
-               digitalRead(pins[i][3]),
-               digitalRead(pins[i][4]));
-      hmiPuts(buf, HMI_CLI);
-    }
-    else
-    {
-      snprintf(buf, 64, "wiegand %02d - - - - -", i + 1);
-      hmiPuts(buf, HMI_CLI);
-    }
-  }
-}
-
-void CmdHardware(int argc, char *argv[])
-{
-  // hardware wiegand port pin state
-  //     -1      0      1   2    3
-  printCommand();
-  if (!checkPassword())
-    return; // Console locked
-
-  // hardware osdp 1 2 1
-  // hardware oddp 1 3 1
-
-  if (argc == 0)
-  {
-    infoHardware();
-    return;
-  }
-
-  if (argc >= 3)
-  {
-    uint8_t oPort = parseInt(argv[1]);
-    uint8_t oPin = parseInt(argv[2]);
-    uint8_t mode = MODE_NONE;
-
-    if (strcmp(argv[0], "wiegand") == 0)
-      mode = MODE_WIEGAND;
-    // if (strcmp(argv[0], "osdp") == 0)
-    //   mode = MODE_OSDP;
-
-    if (mode == MODE_NONE)
-    {
-      char buf[64];
-      snprintf(buf, 64, "Err: Syntax Error");
-      hmiPuts(buf, HMI_CLI);
-      return;
-    }
-
-    if (oPort == 0)
-    {
-      char buf[64];
-      snprintf(buf, 64, "Err: Port is bad");
-      hmiPuts(buf, HMI_CLI);
-    }
-
-    if (oPin >= 5)
-    {
-      char buf[64];
-      snprintf(buf, 64, "Err: Pin is bad");
-      hmiPuts(buf, HMI_CLI);
-    }
-
-    switch (mode)
-    {
-    case MODE_WIEGAND:
-      if (oPort > OSDP_MAX_WIEGAND_COUNT)
-      {
-        char buf[64];
-        snprintf(buf, 64, "Err: Port too big");
-        hmiPuts(buf, HMI_CLI);
-
-        return;
-      }
-      break;
-    }
-
-    bool state = false;
-    if (check_if_true(argc, argv, 3))
-    //if ((argv[3][0] == '1') || (argv[3][0] == 't') || (argv[3][0] == 'T'))
-    {
-      state = true;
-    }
-    switch (mode)
-    {
-    case MODE_WIEGAND:
-      switch (oPin)
-      {
-      case 0:
-        break;
-      case 1:
-        break;
-      case 2:
-        if (state)
-        {
-          reader[oPort - 1].LED_perm.blink(1000, 0).start();
-          reader[oPort - 1].LED_temp.blink(1000, 0).start();
-        }
-        else
-        {
-          reader[oPort - 1].LED_perm.trigger(reader[oPort - 1].LED_temp.EVT_OFF);
-        }
-        break;
-      case 3:
-        if (state)
-        {
-          reader[oPort - 1].buzzer.blink(1000, 0).start();
-        }
-        else
-        {
-          reader[oPort - 1].buzzer.trigger(reader[oPort - 1].buzzer.EVT_OFF);
-        }
-        break;
-      case 4:
-        break;
-      }
-
-      break;
-    }
-    return;
-  }
-  char buf[64];
-  snprintf(buf, 64, "Err: Syntax Error");
-  hmiPuts(buf, HMI_CLI);
-}

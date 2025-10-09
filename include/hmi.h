@@ -7,11 +7,7 @@
 #define HMI_H
 
 
-//###############################################
-// Need to define this out for different products
-#include "alarm_octopus.h"
-//###############################################
-
+#include <Arduino.h>
 
 void hmiPrintCommandPrompt(void);
 int hmiPuts(const char *str, uint8_t mode);

@@ -9,14 +9,6 @@
 
 #include "main.h"
 
-#define TIME_INTERVAL 1500                      //Time interval among sensor readings [milliseconds]
-#define PINS_TEMPS_0 PC_15                      // All off by one!!!!
-#define PINS_TEMPS_1 PD_0
-#define PINS_TEMPS_2 PD_1
-#define PINS_TEMPS_3 PD_2
-#define PINS_TEMPS_4 PD_3
-#define PINS_TEMPS_5 PD_4
-
 
 boolean emulate = false; // Emulate the chiller
 
@@ -38,68 +30,16 @@ void print_eeprom (void);
 void settings_save (void);
 void settings_destroy (void);
 void utilityLoop(void);
-void myhexdump(uint8_t *buf, uint16_t len, char *desc);
-void settings_save_restart(bool new_mode_cp);
 
 
 
 
-
-
-OneWire oneWire_A(PINS_TEMPS_0);
-DallasTemperature dallasTemp_A(&oneWire_A);
-NonBlockingDallas temperatureSensors_A(&dallasTemp_A);
-
-OneWire oneWire_B(PINS_TEMPS_1);
-DallasTemperature dallasTemp_B(&oneWire_B);
-NonBlockingDallas temperatureSensors_B(&dallasTemp_B);
-
-OneWire oneWire_C(PINS_TEMPS_2);
-DallasTemperature dallasTemp_C(&oneWire_C);
-NonBlockingDallas temperatureSensors_C(&dallasTemp_C);
-
-OneWire oneWire_D(PINS_TEMPS_3);
-DallasTemperature dallasTemp_D(&oneWire_D);
-NonBlockingDallas temperatureSensors_D(&dallasTemp_D);
-
-OneWire oneWire_E(PINS_TEMPS_4);
-DallasTemperature dallasTemp_E(&oneWire_E);
-NonBlockingDallas temperatureSensors_E(&dallasTemp_E);
-
-OneWire oneWire_F(PINS_TEMPS_5);
-DallasTemperature dallasTemp_F(&oneWire_F);
-NonBlockingDallas temperatureSensors_F(&dallasTemp_F);
 
 
 uint32_t serialNumber; // Unique ID for the PCB
 
 
 
-Atm_timer timer_ReportFlows;
-Atm_timer timer_ReportRPMs;
-Atm_timer timer_ReportTemps;
-Atm_timer timer_ReportPWMs;
-Atm_timer timer_ReportReporting;
-Atm_timer timer_PollChiller;
-Atm_timer timer_ReportPower;
-Atm_timer timer_TestSetTime;
-Atm_timer timer_SetHardware;
-Atm_timer timer_SendQueue;
-Atm_timer timer_SerialNumber;
-Atm_timer timer_Chiller;
-
-HardwareTimer *stmFanTimer_TIM2 = new HardwareTimer(TIM2);
-HardwareTimer *stmFanTimer_TIM3 = new HardwareTimer(TIM3);
-
-
-uint8_t reportFlows = 5;
-uint8_t reportTemps = 5;
-uint8_t reportRPMs = 5;
-uint8_t reportPWMs = 15;
-uint8_t reportReports = 15;
-uint8_t reportPower = 10;
-uint8_t pollChiller = 1;
-uint8_t testSetTime = 3;
 
 boolean chiller_power = true;
 uint8_t chiller_fault = 0;
@@ -242,82 +182,7 @@ void mqtt (char *topic, int32_t value, uint8_t unit)
 }
 
 
-boolean tempsStale[6];
 
-// ToDo: This needs to be improcved. If there are two sensors per input, it will only show one.
-void handleIntervalElapsed(int port, int deviceIndex, float temperature, String address)
-{
-  if (tempsStale[port]){
-    tempsStale[port] = false;
-    char topic[64];
-    char addr[32];
-
-    address.toCharArray(addr, address.length()+1);
-
-    int16_t t = (temperature * 100);
-    char temp[16];
-
-    if (abs(t) > 100){
-      snprintf (temp, 16, "%d");
-    } else if (abs(t) > 10){
-      snprintf (temp, 16, "0%d");
-    } else {
-      snprintf (temp, 16, "00%d");
-    }
-
-    uint8_t l = strlen (temp);
-    temp[l+1] = 0;
-    temp[l] = temp[l-1];
-    temp[l-1] = temp[l-2];
-    temp[l-2] = '.';
-
-
-
-
-    snprintf (topic, 64, "/temp/%d/%d/%s", port + 1, deviceIndex, addr );
-    mqtt (topic, temp);
-  }
-}
-
-
-
-void handleIntervalElapsed_A(int deviceIndex, int32_t temperatureRAW)
-{
-  handleIntervalElapsed(0, deviceIndex, temperatureSensors_A.rawToCelsius(temperatureRAW), temperatureSensors_A.getAddressString(deviceIndex));  
-}
-
-void handleIntervalElapsed_B(int deviceIndex, int32_t temperatureRAW)
-{
-  handleIntervalElapsed(1, deviceIndex, temperatureSensors_A.rawToCelsius(temperatureRAW), temperatureSensors_B.getAddressString(deviceIndex));  
-}
-
-void handleIntervalElapsed_C(int deviceIndex, int32_t temperatureRAW)
-{
-  handleIntervalElapsed(2, deviceIndex, temperatureSensors_A.rawToCelsius(temperatureRAW), temperatureSensors_C.getAddressString(deviceIndex));  
-}
-
-void handleIntervalElapsed_D(int deviceIndex, int32_t temperatureRAW)
-{
-  handleIntervalElapsed(3, deviceIndex, temperatureSensors_A.rawToCelsius(temperatureRAW), temperatureSensors_D.getAddressString(deviceIndex));  
-}
-
-void handleIntervalElapsed_E(int deviceIndex, int32_t temperatureRAW)
-{
-  handleIntervalElapsed(4, deviceIndex, temperatureSensors_A.rawToCelsius(temperatureRAW), temperatureSensors_E.getAddressString(deviceIndex));  
-}
-
-void handleIntervalElapsed_F(int deviceIndex, int32_t temperatureRAW)
-{
-  handleIntervalElapsed(5, deviceIndex, temperatureSensors_A.rawToCelsius(temperatureRAW), temperatureSensors_F.getAddressString(deviceIndex));  
-}
-
-void handleDeviceDisconnected(int deviceIndex)
-{
-}
-
-extern uint32_t config_rs485_rx;
-extern uint32_t config_rs485_tx  ;
-extern uint32_t config_rs485_ptt;
 
 
 
@@ -442,104 +307,7 @@ boolean aux_power[4];
 
 uint8_t pwms[6];
 
-boolean fan_power[6];
-uint32_t lastFlows[6];
-uint32_t flows[6];
-void flowInt_A (void)
-{
-  flows[0] ++;
-}
 
-void flowInt_B (void)
-{
-  flows[1] ++;
-}
-
-void flowInt_C (void)
-{
-  flows[2] ++;
-}
-
-void flowInt_D (void)
-{
-  flows[3] ++;
-}
-
-void flowInt_E (void)
-{
-  flows[4] ++;
-}
-
-void flowInt_F (void)
-{
-  flows[5] ++;
-}
-
-
-
-uint32_t fansRpm[6];
-uint32_t lastfansRpm[6];
-void fansRpmInt_A (void)
-{
-  fansRpm[0] ++;
-}
-
-void fansRpmInt_B (void)
-{
-  fansRpm[1] ++;
-}
-
-void fansRpmInt_C (void)
-{
-  fansRpm[2] ++;
-}
-
-void fansRpmInt_D (void)
-{
-  fansRpm[3] ++;
-}
-
-void fansRpmInt_E (void)
-{
-  fansRpm[4] ++;
-}
-
-void fansRpmInt_F (void)
-{
-  fansRpm[5] ++;
-}
-
-
-void setFanPWM(uint8_t fan, uint8_t percent)
-{
-  switch (fan){
-    case 0:
-      stmFanTimer_TIM2->setCaptureCompare(1, percent, PERCENT_COMPARE_FORMAT); // 50%
-      break;
-    case 1:
-      stmFanTimer_TIM2->setCaptureCompare(2, percent, PERCENT_COMPARE_FORMAT); // 50%
-      break;
-    case 2:
-      stmFanTimer_TIM3->setCaptureCompare(1, percent, PERCENT_COMPARE_FORMAT); // 50%
-      break;
-    case 3:
-      stmFanTimer_TIM3->setCaptureCompare(2, percent, PERCENT_COMPARE_FORMAT); // 50%
-      break;
-    case 4:
-      stmFanTimer_TIM3->setCaptureCompare(3, percent, PERCENT_COMPARE_FORMAT); // 50%
-      break;
-    case 5:
-      stmFanTimer_TIM3->setCaptureCompare(4, percent, PERCENT_COMPARE_FORMAT); // 50%
-      break;
-  }
-}
-
-void setFanPWMs(void)
-{
-  for (uint8_t i = 0; i < 6; i++){
-    setFanPWM(i, pwms[i]);
-  }  
-}
 
 
 

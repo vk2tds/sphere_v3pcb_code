@@ -2,15 +2,13 @@
 /* All Rights Reserved                                  */
 /* darryl@radio-active.net.au                           */
 
-#include "main.h"
+#include "hmi.h"
 
-extern Flash settings;
+
 
 uint16_t password_timeout = 0; // Stores time until console locks. 8 per minute. Counts down. 0 = Locked.
 
 extern ParseCommands pCmd;
-extern Status statusFactory;
-extern Status statusLive;
 
 char CommandLine[COMMAND_BUFFER_LENGTH + 1]; // Read  commands into this buffer from Serial.  +1 in length for a termination char
 
@@ -24,25 +22,6 @@ void printCommand(void)
     hmiPuts(buf, HMI_CLI);
 }
 
-boolean checkPassword(void)
-{
-    if ((password_timeout == 0) && (settings.protection != 0))
-    {
-        char buf[96];
-        snprintf(buf, 96, "Console locked. Type 'password' followed by the password to unlock");
-        hmiPuts(buf, HMI_CLI);
-        return false;
-    }
-    else
-    {
-        // char buf[64];
-        // snprintf (buf, 64, "Timeout %d protection %d", password_timeout, settings.protection);
-        // hmiPuts(buf, HMI_CLI);
-        password_timeout = PASSWORDTIMEOUT;
-
-        return true;
-    }
-}
 
 // hmiPuts is normally used for libosdp logging.. and used to sync when messages come in.
 int hmiPuts(const char *str, uint8_t mode)

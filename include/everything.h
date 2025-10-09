@@ -1,4 +1,6 @@
 
+#ifndef EVERYTHING_H
+#define EVERYTHING_H
 
 #include <Arduino.h>
 
@@ -11,3 +13,11 @@
 
 #include <Automaton.h>
 #include <stdint.h>
+#include <ADS1X15.h>
+
+
+
+
+
+
+#endif 
