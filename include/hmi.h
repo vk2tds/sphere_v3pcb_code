@@ -26,11 +26,6 @@ uint32_t parse32Int (char *arg);
 
 bool getCommandLineFromSerialPort(char  * commandLine);
 
-#define HMI_ALWAYS 0
-#define HMI_CLI 2
-#define HMI_CONFIG 3
-#define HMI_STATUS 4
-#define HMI_TRACE 5
 
 
 #endif

@@ -5,7 +5,7 @@
 // Ran RPM for six ports
 // Door Open/Close
 // Power On/Off
-// Read current - Raw and normalised
+// Read current (and voltage) - Raw and normalised
 // RGB
 
 // TEMP
@@ -27,6 +27,47 @@
 // More structure to the code
 // Find the STM32F417 CPU - and define a CPU
 // Define boards
+// Modbus read
+
+
+
+// Need a queue of Modbus to poll
+
+
+
+
+// Reporting Frequencies
+// --------- -----------
+// Modbus           As per definition
+// Temperature      xxx
+// Door Status      On Change; xxx
+// Output Status    On Change; xxx
+// Current          xxx
+// Temperature      xxx
+// LED              xxx
+// Fan - PWM        On Change; xxx
+// Fan - RPM        xxx
+// A/C Output       On Change; xxx
+// A/C Input        xxx
+
+
+// When there is a virtual alarm, reporting frequencies change for a time
+
+// Virtual Alarms
+// ------- ------
+// Over Current
+// Under Current
+// Fan RPM High or Low
+// Temperature High or Low
+
+// If T(2) > 45C, update reporting to every 5 seconds
+// If Current(4) < 2A, update reporting to every 10 seconds for 60 seconds
+
+
+
+
+
+
 
 
 
@@ -119,8 +160,46 @@ struct DoorPins doorpins[MAX_DOORS]{
 
 
 
+NonBlockingModbusMaster nullmodbus; // dont really want this but the easiest solution to storing a null reference to a class. 
+NullStream nullstream;
+
+struct PortInformation portinformation[5] = {
+  {portfunction_cli, "", 0, 0, 0, NULL, NULL, "", 0, nullstream, nullstream, 115200, SERIAL_8N1, false},           // port_USB
+  {portfunction_serialMQTT, "", 0, 0, 0, NULL, NULL, "", 0, nullstream, nullstream, 115200, SERIAL_8N1, false},    // portfunction_serialMQTT
+  {portfunction_cli, "", 0, 0, 0, NULL, NULL, "", 0, nullstream, nullstream, 115200, SERIAL_8N1, false},           // port_ethernet_telnet
+  {portfunction_serialAC, "", 0, 0, 0, NULL, NULL, "", 0, nullstream, nullstream, 600, SERIAL_8N1, false},      // port_serial_ac
+  {portfunction_serialMODBUS, "", 0, 0, 0, NULL, NULL, "", 0, nullstream, nullstream, 115200, SERIAL_8E1, false}   // port_serial_rs485
+
+};
+
+uint8_t portinformation_elementcount = sizeof (portinformation) / sizeof (portinformation[0]);
 
 
+struct ModbusScan modbusscan[MAX_MODBUS];
+
+struct AirComms aircomms; 
+
+
+
+
+// These are the default reporting frequencies. They can be overridden for various reasons by setting 
+// the propery .next_report to the required settingsSinceStart. One reason would be external stimulus causing 
+// for instance an output to change state
+
+struct MqttReporting mqttreporting [] = {
+  {MQTT_REP_SOFTHARDWARE, "/board", 900, 5},
+  {MQTT_REP_TEMPERATURE, "/temperature", 15, 15},
+  {MQTT_REP_ADC_VOLTS, "/analog/volts", 60, 15},
+  {MQTT_REP_ADC_CURRENT, "/analog/amps", 30, 15},
+  {MQTT_REP_FAN_RPM, "/fan/RPM", 30, 60},
+  {MQTT_REP_FAN_PWM, "/fan/PWM", 120, 60},
+  {MQTT_REP_OUTPUTS, "/outputs", 120, 60},
+  {MQTT_REP_LOCK, "/lock", 0, 0},
+  {MQTT_REP_AIRCOND, "/aircond", 20, 15},
+  {MQTT_REP_LED, "/led", 0,0},
+  {MQTT_REP_SETTINGS, "/settinsg", 0,0},
+  {MQTT_REP_MODBUS, "/modbus", 0,0}                 // Modbus reports as per definition
+}
 
 
 
@@ -741,11 +820,227 @@ void setup_adc (void)
 
 
 
+uint8_t findNextModbusIndex(uint8_t modbus_instance)
+{
+  // Find the index for the next scan. So, go through the list. Find the first enytry where
+  // the next_scan_time is <= seconds since restart. If there are two that have the sane
+  // time, the priority is the one with the greatest time between scans. This is beause 
+  // this is least likely to be run, and more likely to be pushed to the bottom of the list. 
+  uint8_t found_index = 255; // NULL
+  for (uint8_t i = 0; i < MAX_MODBUS; i++){
+    if (modbusscan[i].modbus_instance == modbus_instance){
+      if (modbusscan[i].next_scan_time <= secondsSinceStart){
+        // This rule needs to run...
+        if (found_index != 255){
+          // And there is a previous found entry
+          if (modbusscan[i].scan_frequency > modbusscan[found_index].scan_frequency){
+            // And the scan frequency of this entry is bigger than the last found one
+            found_index = i;    
+          }
+        } else {
+          found_index = i;
+        }
+      }    
+    }
+  }
+  return found_index;
+}
+
+
+
+// Set PTT
+// Read {Holding} registers
+//
+//
+// Loop
+//  .processdata()
+//  if .IsTransmit == False then
+//    if Buffer is Empy 
+//      Schedule PTT == False
+
+
+
+Atm_led modbus_machine;
+
+
+struct ModbusInstance modbusinstance[MAX_MODBUSINSTANCES];
+
+void modbus_loop (void)
+{
+  for (uint8_t i = 0; i < MAX_MODBUSINSTANCES; i++){
+    if (modbusinstance[i].modbusinstance.isTransmit() == false){
+      if (modbusinstance[i].transmit == true){
+        if (modbusinstance[i].serial.isBufferEmpty()){
+          door_pin_a.begin (modbusinstance[i].ptt_pin)
+            .on()
+            .pause(1)
+            .off(); // Hope this is SHORT enough... else, I might need to change the library. 
+          modbusinstance[i].transmit = false;
+        }
+      }
+    }
+  }
+}
+
+
+
+void processModbusData( NonBlockingModbusMaster &mb)
+{
+
+  uint8_t err = mb.getError(); // 0 for OK
+  if (err){
+    // Do Something
+    return;
+  }
+
+
+  for (uint8_t i=0; i < MAX_MODBUSINSTANCES; i++){
+    if (&modbusinstance[i].modbusinstance == &mb){
+      struct ModbusScan &ms = modbusscan[modbusinstance[i].modbusscan_index];
+      // Store the following data
+      // ms.modbus_address;
+      // ms.start_address;
+      // ms.values;
+      // ms.type;
+      // secondsSinceStart;
+
+      // HOW DO I STORE MODBUS DATA?
+      for (uint8_t size=0; size<mb.getResponseBufferLength(); size++){
+        ms.data[size] = mb.getResponseBuffer(size);
+      }
+      ms.secondsSinceStart = secondsSinceStart; 
+    }
+  }
+
+
+}
+
+
+// NOTE: 3.5 character times after checksum finishes
+
+void pollModbus (uint8_t modbus_instance)
+{
+  uint8_t next = findNextModbusIndex(modbus_instance);
+  if (next != 255){
+    // Therefore we have an entry to deal with...
+
+    //if (nbModbusMaster.readHoldingRegisters(slaveId, address, qty)) {
+
+    switch (modbusscan[next].type){
+      case MODBUS_COILS:
+        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
+        modbusinstance[modbus_instance].transmit = true;
+        modbusinstance[modbus_instance].modbusscan_index = next;
+        modbusinstance[modbus_instance].modbusinstance.readCoils(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
+        break;
+      case MODBUS_DISCRETE_INPUTS:
+        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
+        modbusinstance[modbus_instance].transmit = true;
+        modbusinstance[modbus_instance].modbusscan_index = next;
+        modbusinstance[modbus_instance].modbusinstance.readDiscreteInputs(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
+        break;
+      case MODBUS_HOLDING_REGISTERS:
+        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
+        modbusinstance[modbus_instance].transmit = true;
+        modbusinstance[modbus_instance].modbusscan_index = next;
+        modbusinstance[modbus_instance].modbusinstance.readHoldingRegisters(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
+        break;
+      case MODBUS_INPUT_REGISTERS:
+        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
+        modbusinstance[modbus_instance].transmit = true;
+        modbusinstance[modbus_instance].modbusscan_index = next;
+        modbusinstance[modbus_instance].modbusinstance.readInputRegisters(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
+        break;
+    }
+
+    modbusscan[next].next_scan_time = secondsSinceStart + modbusscan[next].scan_frequency;
+  }
+}
+
+
+
+
+void setup_modbus(void)
+{
+
+    modbusinstance[0].ptt_pin = NONE; //ToDo
+
+
+    // https://s.campbellsci.com/documents/us/manuals/climavue40.pdf
+    modbusscan[0] = {0, 1, MODBUS_INPUT_REGISTERS, 3001, 43, 60, 1}; // Scan weather station - Cumulative
+    modbusscan[1] = {0, 1, MODBUS_INPUT_REGISTERS, 3202, 43, 6, 1}; // Scan weatehr station - Live
+    modbusscan[2] = {0, 1, MODBUS_INPUT_REGISTERS, 3401, 24, 900, 1}; // Scan weather - Serial Numbers
+
+    for (uint8_t i = 0; i < portinformation_elementcount; i++){
+      if (portinformation[i].portfunction == portfunction_serialMODBUS){
+        modbusinstance[0].modbusinstance = portinformation[i].modbus;
+
+      }
+    }
+}
 
 
 
 
 
+
+struct NullStream : public Stream{
+  NullStream( void ) { return; }
+  int available( void ) { return 0; }
+  void flush( void ) { return; }
+  int peek( void ) { return -1; }
+  int read( void ){ return -1 };
+  size_t write( uint8_t u_Data ){ return u_Data, 0x01; }
+};
+
+
+
+
+// Note... Stream data structure will not set baud rate
+void setup_ports(void){
+  for (uint8_t i = 0; i < portinformation_elementcount; i++){
+    // i = enum of Port. 
+    //     port_USB, portfunction_serialMQTT, port_ethernet_telnet, port_serial_ac, port_serial_rs485
+    switch (i){
+      // Standard Serial Ports
+      case port_USB:               
+        SerialUSB.begin();
+        portinformation[i].s = SerialUSB;
+        break;
+      case port_ESP32:             
+        Serial1.begin(portinformation[i].serial_bps, portinformation[i].serial_config);
+        portinformation[i].s = Serial1;
+        break;
+      case port_serial_ac:
+        Serial2.begin(portinformation[i].serial_bps, portinformation[i].serial_config);
+        portinformation[i].s = Serial2;
+        break;
+      case port_serial_rs485:
+        Serial4.begin(portinformation[i].serial_bps, portinformation[i].serial_config);      
+        portinformation[i].s = Serial4;
+        NonBlockingModbusMaster nbmm;
+        portinformation[i].modbus = nbmm;
+        portinformation[i].modbus.initialize (portinformation[i].s, 5000, 5000, 1000000); // Delays are in uSec. TxDelay, TxHang, Timeout
+        break;
+      // Ethernet Serial Port Abstraction
+      case port_ethernet_telnet:
+        // To Be done
+        //n portinformation[i].s = nothin;
+        break;
+    }
+    switch (portinformation[i].portfunction){
+      case portfunction_cli:
+        break;
+      case portfunction_serialMQTT:
+        break;
+      case portfunction_serialAC:
+        break;
+      case portfunction_serialMODBUS:
+        break;
+      default: 
+    }
+  }
+}
 
 
 
@@ -764,10 +1059,85 @@ void setup (void)
 {
 
 
+    setup_ports();
+
     setup_RPM();
     setup_adc();
+    setup_modbus();
 
 }
+
+
+
+
+void aircomms_something ()
+{
+  aircomms.tx_buffer[0] = 0xAA;
+  aircomms.tx_buffer[1] = 0x00;
+  if (aircomms.tx_power){
+    aircomms.tx_buffer[2] = 0x01; // Power On
+  } else {
+    aircomms.tx_buffer[2] = 0x00; // Power Off
+  }
+  aircomms.tx_buffer[3] = aircomms.tx_speed & 0xFF; // Low byte of speed
+  aircomms.tx_buffer[4] = aircomms.tx_speed >> 8;   // High byte of speed
+  aircomms.tx_buffer[5] = 0x00;
+  aircomms.tx_buffer[6] = 0x00;
+  aircomms.tx_buffer[7] = 0x00;
+  aircomms.tx_buffer[8] = 0x00;
+  aircomms.tx_buffer[9] = 0x00;
+  aircomms.tx_buffer[10] = 0x00;
+  aircomms.tx_buffer[11] = 0x00;
+  aircomms.tx_buffer[12] = 0x00;
+  aircomms.tx_buffer[13] = 0x00;
+  uint16_t chksum = 0x100 - ((aircomms.tx_buffer[1] + aircomms.tx_buffer[2] + aircomms.tx_buffer[3] + aircomms.tx_buffer[4] +
+                                    aircomms.tx_buffer[5] + aircomms.tx_buffer[6] +  aircomms.tx_buffer[7] + aircomms.tx_buffer[8] +
+                                    aircomms.tx_buffer[9] + aircomms.tx_buffer[10] + aircomms.tx_buffer[11] + aircomms.tx_buffer[12] +
+                                    aircomms.tx_buffer[13]) | 0xFF);
+  aircomms.tx_buffer[14] = chksum;
+  aircomms.tx_buffer[15] = 0x55;
+
+}
+
+void aircomms_decode(void)
+{
+
+  uint16_t chksum = 0x100 - ((aircomms.rx_buffer[1] + aircomms.rx_buffer[2] + aircomms.rx_buffer[3] + aircomms.rx_buffer[4] +
+                                    aircomms.rx_buffer[5] + aircomms.rx_buffer[6] +  aircomms.rx_buffer[7] + aircomms.rx_buffer[8] +
+                                    aircomms.rx_buffer[9] + aircomms.rx_buffer[10] + aircomms.rx_buffer[11] + aircomms.rx_buffer[12] +
+                                    aircomms.rx_buffer[13]) | 0xFF);
+
+  if (
+    (aircomms.rx_buffer[0] != 0xAA) || 
+    (aircomms.rx_buffer[1] != 0x01) || 
+    (aircomms.rx_buffer[15] != 0x55) ||
+    (aircomms.rx_buffer[8] != 0x00) ||
+    (aircomms.rx_buffer[12] != 0x00) || 
+    (aircomms.rx_buffer[13] != chksum)
+  )
+  {
+    ToDo
+    // Mark Error
+    return;
+  }
+
+  aircomms.rx_compressor_speed = aircomms.rx_buffer[2] + (aircomms.rx_buffer[3]<<8);
+  aircomms.rx_compressor_currernt = aircomms.rx_buffer[4] + (aircomms.rx_buffer[5]<<8);
+  aircomms.rx_busbar_voltage = aircomms.rx_buffer[6] + (aircomms.rx_buffer[7]<<8);
+  aircomms.rx_status_now = aircomms.rx_buffer[13];
+  aircomms.rx_status_historical = aircomms.rx_buffer[9];
+  aircomms.rx_secondssincestart = secondsSinceStart; // Save time of latest reading 
+
+}
+
+
+
+
+
+
+
+
+
 
 
 
@@ -791,11 +1161,201 @@ void setup (void)
 
 // }
 
+void processSerial (uint8_t port)
+{
+
+  switch (portinformation[port].portfunction){
+    case portfunction_cli:
+      portinformation[port].RxBufferSize = 0;
+      return;
+      break;
+    case portfunction_serialMQTT:
+      portinformation[port].RxBufferSize = 0;
+      return;
+      break;
+    case portfunction_serialAC:
+      portinformation[port].RxBufferSize = 0;
+      return;
+      break;
+    case portfunction_serialMODBUS:
+      portinformation[port].RxBufferSize = 0;
+      return;
+      break;
+    default: 
+  }
+}
+
+bool endofpacket (uint8_t port, uint8_t c)
+{
+    switch (portinformation[port].portfunction){
+      case portfunction_cli:
+      case portfunction_serialMQTT:
+        if (c < 0x20){
+          portinformation[port].RxBuffer[portinformation[port].RxBufferInPos % BUFFER_SIZE_RX] = 0;
+          return true;
+        } else {
+          return false;
+        }
+      break;
+      case portfunction_serialAC:
+        break;
+      case portfunction_serialMODBUS:
+        break;
+      default: 
+    }
+}
 
 
 
 
 
+int hmiPuts(uint8_t port, char *str, uint8_t mode);
+void hmiPrintCommandPrompt(uint8_t port);
+extern ParseCommands pCmd;
+
+
+void processCLI(uint8_t port) {
+  PortInformation &pi = portinformation[port];
+
+
+  int16_t err = true;
+
+    int16_t err_1;
+    int16_t err_2;
+    for (uint8_t pos = 0; pos < BUFFER_SIZE_RX; pos++) {
+        if (pi.TxBuffer[pos] == 0x00) break;
+        err = pCmd.read(pi.RxBuffer[pos]);
+    }
+
+    err = false;
+    err_1 = pCmd.read('\r');
+    if (!err_1) {
+        err = pCmd.getError();
+        // Serial.println (err);
+    }
+    err_2 = pCmd.read('\n');
+    if (!err_2) {
+        err = pCmd.getError();
+        // Serial.println (err);
+    }
+
+    if (((pi.RxCharLast == '\r') && (pi.RxCharBeforeThat == '\n')) ||
+        ((pi.RxCharLast == '\n') && (pi.RxCharBeforeThat == '\r'))) {
+        // Strangely, we can ignire if there is a CR/LF or LF/CR, becasue we see
+        // CR __OR__ LF as the end of line, and have aready dealt with it...
+        pi.RxCharLast = ' ';
+        pi.RxCharBeforeThat = ' ';
+        return;
+    }
+
+    switch (err) {
+        case -5:
+        case -6:
+            char buf[64];
+            snprintf(buf, 64, "cmd >%s", pi.RxBuffer);
+            hmiPuts(port, buf, HMI_CLI);
+
+            hmiPuts(port, "Eh?", HMI_CLI);
+            break;
+
+        case 0:
+            // Serial.print ("cmd >");
+            // Serial.println (CommandLine);
+            break;
+        default:
+            pi.s.println("");
+            break;
+    }
+
+    pi.RxBuffer[0] = 0;
+
+    pi.haveUsedHMIputs = true;
+
+    hmiPrintCommandPrompt(port);
+}
+
+bool processCLIchar(uint8_t port)
+{
+    PortInformation &pi = portinformation[port];
+
+    // read asynchronously  until full command input
+    while (Serial.available())
+    {
+        char c = Serial.read();
+        pi.RxCharBeforeThat = pi.RxCharLast;
+        pi.RxCharLast = c;
+        switch (c)
+        {
+        case '\n':
+        case '\r':                     // likely have full command in buffer now,  commands are terminated by CR and/or LS
+            pi.RxBuffer[pi.RxBufferSize] = '\0'; // null terminate our command char array
+            if (pi.RxBufferSize > 0)
+            {
+                pi.RxBufferSize = 0; // charsRead is static,  so have to reset
+                return true;
+            }
+            return true;
+            break;
+        case 0x7f:
+        case '\b': //  handle backspace in input: put a space in last char
+            if (pi.RxBufferSize > 0)
+            { // and adjust commandLine and charsRead
+                pi.RxBuffer[--pi.RxBufferSize] = '\0';
+                pi.s.print("\b \b"); // no idea  how this works, found it on the Internet
+            }
+            break;
+        default:
+            // c = tolower(c);
+            if (pi.RxBufferSize < BUFFER_SIZE_RX)
+            {
+                pi.RxBuffer[pi.RxBufferSize++] = c;
+            }
+            pi.s.print(c);
+            pi.RxBuffer[pi.RxBufferSize] = '\0'; // just in case
+            break;
+        }
+    }
+    return false;
+}
+
+
+bool processMQTTchar(uint8_t port)
+{
+  PortInformation &pi = portinformation[port];
+
+  while (pi.s.available()){
+    pi.RxLast = millis();
+    pi.RxBuffer[pi.RxBufferSize] = pi.s.read();
+    pi.RxBufferSize++;
+    if (endofpacket(i, pi.RxBuffer[pi.RxBufferSize-1])){
+      processSerial(i); //process
+      pi.RxBufferSize = 0;           
+    }
+    if (pi.RxBufferSize >= (BUFFER_SIZE_TX-2)){
+      processSerial(i); //process
+      pi.RxBufferSize = 0;
+    }
+  }
+}
+
+bool processACchar(uint8_t port)
+{
+  PortInformation &pi = portinformation[i];
+
+  while (pi.s.available()){
+    pi.RxLast = millis();
+    pi.RxBuffer[pi.RxBufferSize] = pi.s.read();
+    pi.RxBufferSize++;
+    if (endofpacket(i, pi.RxBuffer[pi.RxBufferSize-1])){
+      processSerial(i); //process
+      pi.RxBufferSize = 0;           
+    }
+    if (pi.RxBufferSize >= (BUFFER_SIZE_TX-2)){
+      processSerial(i); //process
+      pi.RxBufferSize = 0;
+    }
+  }
+}
 
 
 
@@ -804,9 +1364,22 @@ void setup (void)
 // -----------------------------------------------------
 
 
+void loop_oncePerSecond(void)
+{
+    // This is for functions that need to run about once a second. 
+    
+    sample_RPM();
+
+}
+
+
 
 void loop (void)
 {
+  // This is a counter that permits us to only run some code periodically. For instance,
+  // if we did the test ((every & 0x0F) == 0), this would be true every 16 loops. 
+  static uint8_t every = 0;
+
   // Loop Philosophy...
   // 1. Calculate the number of seconds since system start. This is not quite as easy as it sounds, without using 
   // an interrupt. 
@@ -825,21 +1398,122 @@ void loop (void)
   }
   if ((millis() - 1000) >= lastMillis){
     secondsSinceStart++;
+    loop_oncePerSecond();
   }
 
 
+  // bitrate is 16.3 kbps, so we have to sample at least at
+  // 32.6 khz. Do this once per loop.
+  temperature_loop();
 
 
+  // We probably do not need to run this every loop
+  // Particularly if we fix PTT on RS485
+  if ((every & 0x0F) == 0){
+    // Run the state machine.
+    automaton.run();
+  }
+  
+  if ((every & 0x1F) == 0){
+    // Run this every 32 loops
+    modbus_loop();
+  }
 
-    // Run once a second.
-    // sample_RPM();
 
-    temperature_loop();
+  // Serial code will probably run the slowest. But the data comes in likely
+  // the slowest too, or at least can cope with a heap of delay. For instance,
+  // the serial CLI running at 115200 comes in at about 11520 bytes per
+  // second. But there is an incoming buffer of 256 bytes, so we only need to
+  // check about 45 times per second. 
+  //
+  // Of course, we want to check things a lot more often than that. Modbus is 
+  // running at 19200 bps, or 1920 bytes per second. Assuming 10 bytes per packet, 
+  // that is 192 packets per second. But Modbus is done elsewhere
+  //
+  // In essence, if we run this code every 16 loops, that is OK
+
+  if ((every & 0x0F) == 0x08){
+    // do not overlap with other every 16 operators.
+
+    // Three times to process end of packet
+    //   * When the buffer fills up
+    //   * When there is an end of packet character
+    //   * When there is a timeout. 
+
+    for (uint8_t i = 0; i < portinformation_elementcount; i++){
+      // i = enum of Port. 
+      //     port_USB, portfunction_serialMQTT, port_ethernet_telnet, port_serial_ac, port_serial_rs485
+      PortInformation &pi = portinformation[i];
+      switch (i){
+        // Standard Serial Ports
+        case port_USB:               
+        case port_ESP32:             
+        case port_serial_ac:
+          if (pi.s.available()){
+            pi.RxLast = millis();      
+            switch (portinformation[i].portfunction){
+              case portfunction_cli:
+                if (processCLIchar(i)){
+                  processCLI(i);
+                }
+                break;
+              case portfunction_serialMQTT:
+                processMQTTchar(i);
+                break;
+              case portfunction_serialAC:
+                processACchar(i);
+                break;
+              default: 
+            }
+          }
+  
+
+        // RS485 will be ModBus - at least at the moment. 
+        case port_serial_rs485:
+          // Ignore things hgere 
+          break;
+        // Ethernet Serial Port Abstraction
+        case port_ethernet_telnet:
+
+          break;
+      }
+
+      switch (portinformation[i].portfunction){
+        case portfunction_cli:
+          break;
+        case portfunction_serialMQTT:
+          break;
+        case portfunction_serialAC:
+          break;
+        case portfunction_serialMODBUS:
+          if (portinformation[i].modbus.justFinished()) { // Also manage timeout
+            xxx
+          }
+          break;
+        default: 
+      }
+
+      // Timeouts
+
+      if (pi.RxBufferSize > 0){
+        if ((pi.RxLast > (millis() - pi.RxTimeout)) | (pi.RxLast >= (0xFFFF - pi.RxTimeout ))){
+          // If we have a real timeout... OR...
+          // If we are within a timeout from the length of millis()
+          // Then process the data we have received regardless of anything else
+          // This will mean that if data comes in at some point within the last (timeout) mSec of the 
+          // 49 day cycle then these will be thrown away. Unlikely to happen. 
+          processSerial(i); //process
+          pi.RxBufferSize = 0;
+
+        }
+      }
+
+    }
+  }
 
 
+  every++;
 
-  // Run the state machine.
-  automaton.run();
 
 }
 

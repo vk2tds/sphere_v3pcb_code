@@ -528,3 +528,17 @@ bin/libdeps/cabrai_stm32_pcbv1/ADS1X15/.github/workflows/arduino_test_runner.yml
 bin/libdeps/cabrai_stm32_pcbv1/ADS1X15/.github/workflows/arduino-lint.yml
 bin/libdeps/cabrai_stm32_pcbv1/ADS1X15/.github/workflows/jsoncheck.yml
 bin/libdeps/cabrai_stm32_pcbv1/ParseCommands/examples/Basic/Basic.ino
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/.piopm
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/keywords.txt
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/library.properties
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/LICENSE.txt
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/README.md
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/examples/UNO_modbus/UNO_modbus.ino
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/examples/UNO_modbus_chaining/UNO_modbus_chaining.ino
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/examples/UNO_modbus_processing/UNO_modbus_processing.ino
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/examples/UNO_modbus_retry/UNO_modbus_retry.ino
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/examples/UNO_modbus_simple_chaining/UNO_modbus_simple_chaining.ino
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/src/NonBlockingModbusMaster.cpp
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/src/NonBlockingModbusMaster.h
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/src/util/crc16.h
+bin/libdeps/cabrai_stm32_pcbv1/NonBlockingModbusMaster/src/util/word.h

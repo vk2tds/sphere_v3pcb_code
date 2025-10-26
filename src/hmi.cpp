@@ -2,30 +2,38 @@
 /* All Rights Reserved                                  */
 /* darryl@radio-active.net.au                           */
 
-#include "hmi.h"
+#include <ParseCommands.h>
 
+#include "hmi.h"
+#include "defines.h"
 
 
 uint16_t password_timeout = 0; // Stores time until console locks. 8 per minute. Counts down. 0 = Locked.
 
 extern ParseCommands pCmd;
 
-char CommandLine[COMMAND_BUFFER_LENGTH + 1]; // Read  commands into this buffer from Serial.  +1 in length for a termination char
+extern struct PortInformation portinformation[];
+extern uint8_t portinformation_elementcount;
 
-bool haveUsedHmiPuts = false; // If we have used hmiPuts in this iteration.
+//char CommandLine[COMMAND_BUFFER_LENGTH + 1]; // Read  commands into this buffer from Serial.  +1 in length for a termination char
+
+//bool haveUsedHmiPuts = false; // If we have used hmiPuts in this iteration.
 
 // Print the command line
-void printCommand(void)
+void printCommand(uint8_t port)
 {
-    char buf[64];
-    snprintf(buf, 64, "cmd >%s", CommandLine);
-    hmiPuts(buf, HMI_CLI);
+    PortInformation &pi = portinformation[port];
+    char buf[BUFFER_SIZE_RX];
+    snprintf(buf, BUFFER_SIZE_RX, "cmd >%s", pi.RxBuffer);
+    hmiPuts(port, buf, HMI_CLI);
 }
 
 
-// hmiPuts is normally used for libosdp logging.. and used to sync when messages come in.
-int hmiPuts(const char *str, uint8_t mode)
+
+
+int hmiPuts(uint8_t port, char *str, uint8_t mode)
 {
+    PortInformation &pi = portinformation[port];
     switch (mode)
     {
     case HMI_ALWAYS:
@@ -35,29 +43,24 @@ int hmiPuts(const char *str, uint8_t mode)
     case HMI_CONFIG:
         break;
     case HMI_STATUS:
-        if (
-            ((password_timeout == 0) && (settings.protection != 0)) && 
-            (settings.protect != 0)
-           )
-            return 0;
         break;
     case HMI_TRACE:
         break;
     }
 
-    if (!haveUsedHmiPuts)
+    if (! pi.haveUsedHMIputs)
     {
-        for (uint16_t i = 0; i < strlen(CommandLine) + 5; i++)
+        for (uint16_t i = 0; i < strlen((const char *)pi.RxBuffer) + 5; i++)
         {
-            Serial.print("\b");
+            pi.s.print("\b");
         }
-        for (uint16_t i = 0; i < strlen(CommandLine) + 5; i++)
+        for (uint16_t i = 0; i < strlen((const char *)pi.RxBuffer) + 5; i++)
         {
-            Serial.print(" ");
+            pi.s.print(" ");
         }
-        for (uint16_t i = 0; i < strlen(CommandLine) + 5; i++)
+        for (uint16_t i = 0; i < strlen((const char *)pi.RxBuffer) + 5; i++)
         {
-            Serial.print("\b");
+            pi.s.print("\b");
         }
     }
     bool found = false; 
@@ -67,138 +70,129 @@ int hmiPuts(const char *str, uint8_t mode)
         {
             if (!found)
             {
-                Serial.println ("");
+                pi.s.println ("");
             }
             found = true;
         } else {
-            Serial.print (str[i]);
+            pi.s.print (str[i]);
             found = false;
         }
     }
     if (!found)
     {
-        Serial.println ("");
+        pi.s.println ("");
     }
 
-    // if ((strchr(str, '\r') == NULL) || (strchr(str, '\n') == NULL))
-    // { // If we already have crlf dont do it a second time
-    //     Serial.println(str);
-    // }
-    // else
-    // {
-    //     Serial.print(str);
-    // }
-    haveUsedHmiPuts = true;
+    pi.haveUsedHMIputs = true;
 
-    // do we need phy OSDP logged? Dont think so.
-    if (strstr(str, "SC Active with SCBK-D"))
-    {
-        // PD lost the packet and the CP recovered
-        statusLive.osdp_lost_cp++;
-        statusFactory.osdp_lost_cp++;
-    }
-    if (strstr(str, "received a sequence repeat packet"))
-    {
-        // CP lost the packet and they sent it again
-        statusLive.osdp_lost_pd++;
-        statusFactory.osdp_lost_pd++;
-    }
+
 
     return 0;
 }
+
+int hmiPuts(char *str, uint8_t mode)
+{
+    for (uint8_t i = 0; i < portinformation_elementcount; i++){
+        if (mode == HMI_CLI){
+            printf ("YOU SHOULD NOT GET HERE\r\n");
+        } else {
+            hmiPuts (i, str, mode);
+        }
+    }
+}
+
+
 
 int hmiPutsTrace(const char *str)
 {
     return hmiPuts(str, HMI_TRACE);
 }
 
-void hmiPrintCommandPrompt(void)
+void hmiPrintCommandPrompt(uint8_t port)
 {
-    if (haveUsedHmiPuts)
+    PortInformation &pi = portinformation[port];
+    if (pi.haveUsedHMIputs)
     {
-        haveUsedHmiPuts = false;
-        Serial.print("cmd >");
+        pi.haveUsedHMIputs = false;
+        pi.s.print("cmd >");
         for (uint8_t pos = 0; pos < COMMAND_BUFFER_LENGTH; pos++)
         {
-            if (CommandLine[pos] == 0x00)
+            if (pi.RxBuffer[pos] == 0x00)
                 break;
-            if ((CommandLine[pos] != '\r') && (CommandLine[pos] != '\n'))
+            if ((pi.RxBuffer[pos] != '\r') && (pi.RxBuffer[pos] != '\n'))
             { // Dont print CRLF
-                Serial.write(CommandLine[pos]);
+                pi.s.write(pi.RxBuffer[pos]);
             }
         }
     }
 }
 
-uint8_t charLast = '\0';
-uint8_t charBeforeThat = '\0';
+// void hmi(void)
+// {
+//     bool received = getCommandLineFromSerialPort(&CommandLine[0]); // global CommandLine is defined in hmi.h
+//     int16_t err = true;
 
-void hmi(void)
-{
-    bool received = getCommandLineFromSerialPort(&CommandLine[0]); // global CommandLine is defined in hmi.h
-    int16_t err = true;
+//     int16_t err_1;
+//     int16_t err_2;
+//     if (received)
+//     {
+//         for (uint8_t pos = 0; pos < COMMAND_BUFFER_LENGTH; pos++)
+//         {
+//             if (CommandLine[pos] == 0x00)
+//                 break;
+//             err = pCmd.read(CommandLine[pos]);
+//         }
 
-    int16_t err_1;
-    int16_t err_2;
-    if (received)
-    {
-        for (uint8_t pos = 0; pos < COMMAND_BUFFER_LENGTH; pos++)
-        {
-            if (CommandLine[pos] == 0x00)
-                break;
-            err = pCmd.read(CommandLine[pos]);
-        }
+//         err = false;
+//         err_1 = pCmd.read('\r');
+//         if (!err_1)
+//         {
+//             err = pCmd.getError();
+//             // Serial.println (err);
+//         }
+//         err_2 = pCmd.read('\n');
+//         if (!err_2)
+//         {
+//             err = pCmd.getError();
+//             // Serial.println (err);
+//         }
 
-        err = false;
-        err_1 = pCmd.read('\r');
-        if (!err_1)
-        {
-            err = pCmd.getError();
-            // Serial.println (err);
-        }
-        err_2 = pCmd.read('\n');
-        if (!err_2)
-        {
-            err = pCmd.getError();
-            // Serial.println (err);
-        }
+//         if (
+//             ((charLast == '\r') && (charBeforeThat == '\n')) ||
+//             ((charLast == '\n') && (charBeforeThat == '\r')))
+//         {
+//             // Strangely, we can ignire if there is a CR/LF or LF/CR, becasue we see CR __OR__ LF as
+//             // the end of line, and have aready dealt with it...
+//             charLast = ' ';
+//             charBeforeThat = ' ';
+//             return;
+//         }
 
-        if (
-            ((charLast == '\r') && (charBeforeThat == '\n')) ||
-            ((charLast == '\n') && (charBeforeThat == '\r')))
-        {
-            // Strangely, we can ignire if there is a CR/LF or LF/CR, becasue we see CR __OR__ LF as
-            // the end of line, and have aready dealt with it...
-            charLast = ' ';
-            charBeforeThat = ' ';
-            return;
-        }
+//         switch (err)
+//         {
+//         case -5:
+//         case -6:
+//             char buf[64];
+//             snprintf(buf, 64, "cmd >%s", CommandLine);
+//             hmiPuts(buf, HMI_CLI);
 
-        switch (err)
-        {
-        case -5:
-        case -6:
-            char buf[64];
-            snprintf(buf, 64, "cmd >%s", CommandLine);
-            hmiPuts(buf, HMI_CLI);
+//             hmiPuts("Eh?", HMI_CLI);
+//             break;
+//         case 0:
+//             // Serial.print ("cmd >");
+//             // Serial.println (CommandLine);
+//             break;
+//         default:
+//             Serial.println("");
+//             break;
+//         }
 
-            hmiPuts("Eh?", HMI_CLI);
-            break;
-        case 0:
-            // Serial.print ("cmd >");
-            // Serial.println (CommandLine);
-            break;
-        default:
-            Serial.println("");
-            break;
-        }
+//         CommandLine[0] = 0;
 
-        CommandLine[0] = 0;
-
-        haveUsedHmiPuts = true;
-        hmiPrintCommandPrompt();
-    }
-}
+//         haveUsedHmiPuts = true;
+//         hmiPrintCommandPrompt();
+//     }
+// }
 
 uint8_t parseInt(char *arg)
 {
