@@ -20,6 +20,8 @@ extern uint32_t secondsSinceStart;
 extern struct ModbusInstance modbusinstance[MAX_MODBUSINSTANCES];
 extern struct ModbusScan modbusscan[MAX_MODBUS];
 extern struct AirComms aircomms;
+extern struct MqttReporting mqttreporting [];
+extern uint8_t mqttreporting_elementcount;
 
 
 
@@ -273,6 +275,73 @@ void CmdModbus(int argc, char* argv[]) {
         dooraction = 2;
     }
     door(dPort - 1, dooraction);
+}
+
+
+void infoMqtt (void)
+{
+    char buf[128];
+
+    for (uint8_t i = 0; i < mqttreporting_elementcount; i++){
+        char buf2[64];
+        switch (mqttreporting[i].sensor){
+            case MQTT_REP_SOFTHARDWARE:
+                snprintf (buf2, 64, "Board software and hardware");
+                break;
+            case MQTT_REP_TEMPERATURE:
+                snprintf (buf2, 64, "Temperature                ");
+                break;
+            case MQTT_REP_ADC_VOLTS:
+                snprintf (buf2, 64, "Voltage Sensors            ");
+                break;
+            case MQTT_REP_ADC_CURRENT:
+                snprintf (buf2, 64, "Current Sensors            ");
+                break;
+            case MQTT_REP_FAN_RPM:
+                snprintf (buf2, 64, "Fan RPM Measurement        ");
+                break;
+            case MQTT_REP_FAN_PWM:
+                snprintf (buf2, 64, "Fan PWM Control            ");
+                break;
+            case MQTT_REP_OUTPUTS:
+                snprintf (buf2, 64, "Switch Outputs             ");
+                break;
+            case MQTT_REP_LOCK:
+                snprintf (buf2, 64, "Door Locks                 ");
+                break;
+            case MQTT_REP_AIRCOND:
+                snprintf (buf2, 64, "Air Conditioner            ");
+                break;
+            case MQTT_REP_LED:
+                snprintf (buf2, 64, "LEDs                       ");
+                break;
+            case MQTT_REP_MODBUS:
+                snprintf (buf2, 64, "Modbus                     ");
+                break;
+            case MQTT_REP_SETTINGS:
+                snprintf (buf2, 64, "Settings                   ");
+                break;
+        }
+        uint32_t next_age =  mqttreporting[i].next_report - secondsSinceStart;
+
+        snprintf (buf, 128, "mqtt reporting - %s - %s - %d %ld", buf2, mqttreporting[i].mqtt_base, mqttreporting[i].frequency, next_age);
+        hmiPuts(buf, HMI_CLI);
+    }
+
+
+
+}
+
+
+
+void CmdMqtt(int argc, char* argv[]) {
+
+    if (argc == 0){
+        infoMqtt();
+        return;
+    }
+
+
 }
 
 

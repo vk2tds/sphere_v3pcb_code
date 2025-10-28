@@ -34,7 +34,6 @@
 
 
 
-
 #include <Arduino.h>
 
 
@@ -241,10 +240,10 @@ struct AirComms{
 
 
 #define MQTT_REP_SOFTHARDWARE 0
-#define MQTT_REP_ADC_VOLTS 1
-#define MQTT_REP_ADC_CURRENT 2
-#define MQTT_REP_FAN_RPM 3
-#define MQTT_REP_FAN_PWM 4
+#define MQTT_REP_ADC 1
+//#define MQTT_REP_ADC_CURRENT 2
+#define MQTT_REP_FAN 3
+//#define MQTT_REP_FAN_PWM 4
 #define MQTT_REP_OUTPUTS 5
 #define MQTT_REP_LOCK 6
 #define MQTT_REP_TEMPERATURE 7

@@ -1,5 +1,8 @@
 #include "everything.h"
 #include "defines.h"
+#include "utility.h"
+#include "hmi.h"
+#include <ArduinoJson.h>
 
 // Fan PWM for six ports
 // Ran RPM for six ports
@@ -29,7 +32,7 @@
 // Define boards
 // Modbus read
 
-
+// Todo: Have trace only happen on specific CLI ports
 
 // Need a queue of Modbus to poll
 
@@ -62,6 +65,7 @@
 
 // If T(2) > 45C, update reporting to every 5 seconds
 // If Current(4) < 2A, update reporting to every 10 seconds for 60 seconds
+
 
 
 
@@ -189,19 +193,17 @@ struct AirComms aircomms;
 struct MqttReporting mqttreporting [] = {
   {MQTT_REP_SOFTHARDWARE, "/board", 900, 5},
   {MQTT_REP_TEMPERATURE, "/temperature", 15, 15},
-  {MQTT_REP_ADC_VOLTS, "/analog/volts", 60, 15},
-  {MQTT_REP_ADC_CURRENT, "/analog/amps", 30, 15},
-  {MQTT_REP_FAN_RPM, "/fan/RPM", 30, 60},
-  {MQTT_REP_FAN_PWM, "/fan/PWM", 120, 60},
+  {MQTT_REP_ADC, "/analog", 60, 15},
+  {MQTT_REP_FAN, "/fan/", 30, 60},
   {MQTT_REP_OUTPUTS, "/outputs", 120, 60},
   {MQTT_REP_LOCK, "/lock", 0, 0},
   {MQTT_REP_AIRCOND, "/aircond", 20, 15},
   {MQTT_REP_LED, "/led", 0,0},
-  {MQTT_REP_SETTINGS, "/settinsg", 0,0},
+  {MQTT_REP_SETTINGS, "/settings", 0,0},
   {MQTT_REP_MODBUS, "/modbus", 0,0}                 // Modbus reports as per definition
-}
+};
 
-
+uint8_t mqttreporting_elementcount = sizeof (mqttreporting) / sizeof (mqttreporting[0]);
 
 
 
@@ -419,6 +421,319 @@ void sample_RPM(void)
 // These functions send MQTT, generally when things change, but also on startup.
 // They can send MQTT to any connected MQTT devices, but also possibly out the
 // USB port if in trace mode ETC. 
+
+// MQTT
+// sendMQTT (sentence, data)
+// Need MQTT Queue
+
+
+void queueMQTT(char sentence[], char data[])
+{
+// QUEUE GHERE
+} 
+
+void sendMqtt (char sentence[], char data[])
+{
+  // -----------------------------
+  // SEND THE MQTT TO THE QUEUE... 
+  // -----------------------------
+
+  // Send it as a trace, so that any CLI who needs to see it gets it
+  // At the moment TRACE sends everywhere on CLI
+  char buf[512];
+  snprintf (buf, 512, "%s|%s", sentence, data);
+  hmiPuts (buf, HMI_TRACE);
+
+  queueMQTT (sentence, data);
+}
+
+void sendMqtt (char sentence[], JsonDocument doc)
+{
+  // -----------------------------
+  // SEND THE MQTT TO THE QUEUE... 
+  // -----------------------------
+
+  // Send it as a trace, so that any CLI who needs to see it gets it
+  // At the moment TRACE sends everywhere on CLI
+  char buf[512];
+  //snprintf (buf, 512, "%s|%s", sentence, data);
+  hmiPuts (buf, HMI_TRACE);
+
+  //queueMQTT (sentence, data);
+}
+
+uint8_t getMqttReportingIndex (uint8_t sensor)
+{
+    uint8_t sensor_index = 0xFF;
+    for (uint8_t i = 0; i < mqttreporting_elementcount; i++){
+      if (mqttreporting[i].sensor == sensor){
+        sensor_index = i;
+      }
+    }
+    return sensor_index;
+}
+
+// https://arduinojson.org/v7/tutorial/serialization/
+
+void sendMqttModbus(uint8_t modbusscanindex)
+{
+    char buf_sentence[128];
+    ModbusScan &ms = modbusscan[modbusscanindex];
+
+    uint8_t sensor_index = getMqttReportingIndex(MQTT_REP_MODBUS);
+
+    if (sensor_index == 0xFF){
+      // Error... Oops
+      return;
+    }
+
+    // /modbus/[modbus_instance]/[modbus_address]/[register_type]/[start_address]/[value_count]
+    // /modbus/0/1/3/2301/16
+    snprintf (buf_sentence, 128, "%s/%02d/%02d/%02x/%05d/%04d", mqttreporting[sensor_index],
+      ms.modbus_instance, ms.modbus_address, ms.type, ms.start_address, ms.values);
+
+    JsonDocument doc;
+
+    doc["time"] = secondsSinceStart;
+    doc["sample_time"] = ms.secondsSinceStart;
+
+    uint16_t val;
+    for (uint8_t j = 0; j < ms.values; j++){
+      switch (ms.type){
+        case MODBUS_COILS:
+        case MODBUS_DISCRETE_INPUTS:
+            uint16_t temp = ms.data[j>>4];
+            uint8_t c;
+            if (temp & (1 << 0x0F)){
+              val = 1;
+            } else {
+              val = 0;
+            }
+            break;
+        case MODBUS_HOLDING_REGISTERS:
+        case MODBUS_INPUT_REGISTERS:
+            val = ms.start_address+j, ms.data[j];
+            break;
+        default:
+            break;
+        doc["data"][j] = val;
+      }
+    }
+    sendMqtt(buf_sentence, doc);
+}
+
+
+
+void sendMqttADCorOutputs (bool outputs)
+{
+  // If outputs == true, this is for output status
+  // if outputs == false, this is for ADC values
+
+  char buf_sentence[128];
+
+  char output_string[16];
+
+  uint8_t sensor_index = getMqttReportingIndex(MQTT_REP_ADC);
+
+  if (sensor_index == 0xFF){
+    // Error... Oops
+    return;
+  }
+
+  if (outputs){
+    snprintf (output_string, 16, "outputs");
+  } else {
+    snprintf (output_string, 16, "analog");
+  };
+
+
+  for (uint8_t j=0; j<32; j++){
+    JsonDocument doc;
+    doc["time"] = secondsSinceStart;
+    if (outputs){
+      doc["sample_time"] = secondsSinceStart;
+    }
+
+    switch (j){
+      case voltage_12:
+        snprintf (buf_sentence, 128, "%s%s/12v", mqttreporting[sensor_index], output_string);
+        break;
+      case voltage_48:
+        snprintf (buf_sentence, 128, "%s%s/48v", mqttreporting[sensor_index], output_string);
+        break;
+      case voltage_fans:
+        snprintf (buf_sentence, 128, "%s%s/fans", mqttreporting[sensor_index], output_string);
+        break;
+      case voltage_lights:
+        snprintf (buf_sentence, 128, "%s%s/lights", mqttreporting[sensor_index], output_string);
+        break;
+      case voltage_supply:          
+        snprintf (buf_sentence, 128, "%s%s/supply", mqttreporting[sensor_index], output_string);
+        break;
+      default:
+    }
+
+    if (strlen(buf_sentence) > 0){
+      if (outputs){
+        JsonDocument doc;
+        doc["time"] = secondsSinceStart;
+        doc["sample_time"] = secondsSinceStart;
+
+        for (uint8_t i=0; i<h_elementcount; i++){
+          struct Hardware &h2 = h[i];
+          bool state;
+          if (digitalRead (h2.power_pin)){
+            state == true;
+          }
+          doc["data"][i] = state;
+        }
+        sendMqtt (buf_sentence, doc);
+      } else {
+        JsonDocument doc;
+        doc["time"] = secondsSinceStart;
+
+        for (uint8_t i=0; i<h_elementcount; i++){
+          struct Hardware &h2 = h[i];
+          if (h2.mode == j){
+            if (h2.current_adc_address != INVALID_ADC_ADDRESS){
+              doc["data"]["amps"][j] = adcstorage[h2.current_adc_address].adc;
+              doc["data"]["amps"][j]["sample_time"] = adcstorage[h2.current_adc_address].secondsSinceStart;
+            }
+            if (h2.voltage_adc_address != INVALID_ADC_ADDRESS){
+              doc["data"]["volts"][j] = adcstorage[h2.voltage_adc_address].adc;
+              doc["data"]["volts"][j]["sample_time"] = adcstorage[h2.voltage_adc_address].secondsSinceStart;
+            }
+          }
+        }
+        sendMqtt (buf_sentence, doc);
+      }
+    }
+  }
+}
+
+
+void sendMqttTemp (void)
+{
+
+
+    char buf_sentence[128];
+
+    uint8_t sensor_index = getMqttReportingIndex(MQTT_REP_TEMPERATURE);
+
+    if (sensor_index == 0xFF){
+      // Error... Oops
+      return;
+    }
+
+    JsonDocument doc;
+    doc["time"] = secondsSinceStart;
+
+    snprintf (buf_sentence, 128, "%s", mqttreporting[sensor_index]);
+
+
+    //struct TEMPstorage tempstorage [MAX_TEMP_STRINGS];
+
+    for (uint8_t i = 0; i<MAX_TEMP_STRINGS; i++){
+      doc["data"][i] = tempstorage[i].temperature;
+      doc["data"][i]['sample_time'] = tempstorage[i].secondsSinceStart;
+    }
+    sendMqtt (buf_sentence, doc);
+}
+
+
+void sendMqttFan (void)
+{
+
+
+    char buf_sentence[128];
+
+    uint8_t sensor_index = getMqttReportingIndex(MQTT_REP_FAN);
+
+    if (sensor_index == 0xFF){
+      // Error... Oops
+      return;
+    }
+
+    JsonDocument doc;
+    doc["time"] = secondsSinceStart;
+
+    snprintf (buf_sentence, 128, "%s", mqttreporting[sensor_index]);
+
+
+    //struct TEMPstorage tempstorage [MAX_TEMP_STRINGS];
+
+    for (uint8_t i = 0; i < MAX_FAN_PWM_RPM; i++){
+      doc["data"][i]["pwm"] = fan_pwm_rpm[i].pwm;
+      doc["data"][i]["rpm"]["timediff"] = fan_pwm_rpm[i].timediff;
+      doc["data"][i]["rpm"]["rpmcount"] = fan_pwm_rpm[i].rpmcount;
+    }
+    sendMqtt (buf_sentence, doc);
+}
+
+void sendMqttAc (void)
+{
+
+    char buf_sentence[128];
+
+    uint8_t sensor_index = getMqttReportingIndex(MQTT_REP_AIRCOND);
+
+    if (sensor_index == 0xFF){
+      // Error... Oops
+      return;
+    }
+
+    JsonDocument doc;
+    doc["time"] = secondsSinceStart;
+    doc["sample_time"] = aircomms.rx_secondssincestart;
+
+    snprintf (buf_sentence, 128, "%s", mqttreporting[sensor_index]);
+
+    doc["data"]["status"]["compressor"]["amps"] = aircomms.rx_compressor_currernt;
+    doc["data"]["status"]["compressor"]["speed"] = aircomms.rx_compressor_speed;
+    doc["data"]["status"]["bus"]["voltage"] = aircomms.rx_busbar_voltage;
+    doc["data"]["status"]["live"] = aircomms.rx_status_now;
+    doc["data"]["status"]["historical"] = aircomms.rx_status_historical;
+    doc["data"]["power"] = aircomms.tx_power;
+    doc["data"]["speed"] = aircomms.tx_speed;
+
+    sendMqtt (buf_sentence, doc);
+}
+
+
+void sendMqttSoftHardWare (void)
+{
+
+    char buf_sentence[128];
+
+    uint8_t sensor_index = getMqttReportingIndex(MQTT_REP_SOFTHARDWARE);
+
+    if (sensor_index == 0xFF){
+      // Error... Oops
+      return;
+    }
+
+    JsonDocument doc;
+    doc["time"] = secondsSinceStart;
+
+    snprintf (buf_sentence, 128, "%s", mqttreporting[sensor_index]);
+
+    doc["software"]["copyright"] = "COPYRIGHT";
+    doc["software"]["product"] = "PROJECT_NAME";
+    doc["software"]["version"] = "PROJECT_VERSION";
+    doc["software"]["date"] = "COPYRIGHT";
+    doc["software"]["compile"] = "LAST_BUILD_TIME";
+
+
+    doc["hardware"]["processor"] = "";
+    doc["hardware"]["MAC"] = "";
+    doc["hardware"]["serial"] = "";
+    doc["hardware"]["product"] = "";
+    doc["hardware"]["version"] = "";
+
+
+
+    sendMqtt (buf_sentence, doc);
+}
 
 void mqtt_door (uint8_t door_number, bool state){
   // TODO: Send MQTT
@@ -745,12 +1060,14 @@ uint8_t adc_index = 0;
 void adc_callback_state_2_set_adc_port_and_read (int idx, int v, int up)
 {
 
+
+
   // ToDo: add ADC
   adcstorage[adc_index].readADC(adc_index & 0x03) = 0; // The value actually gets stored here.
   adcstorage[adc_index].secondsSinceStart = secondsSinceStart;
 
-
-
+  adc_index ++;
+  adc_index = adc_index & 0x1F;
 
 
 }
@@ -803,7 +1120,7 @@ void setup_adc (void)
 {
 
   // Init ADCs
-  for (i=0; i < 4; i++){
+  for (uint8_t i=0; i < 4; i++){
     init_adc(0, i);
     init_adc(1, i);
   }
@@ -904,11 +1221,13 @@ void processModbusData( NonBlockingModbusMaster &mb)
       // ms.type;
       // secondsSinceStart;
 
-      // HOW DO I STORE MODBUS DATA?
       for (uint8_t size=0; size<mb.getResponseBufferLength(); size++){
         ms.data[size] = mb.getResponseBuffer(size);
       }
       ms.secondsSinceStart = secondsSinceStart; 
+  
+      sendMqttModbus (modbusinstance[i].modbusscan_index);
+
     }
   }
 
@@ -963,7 +1282,7 @@ void pollModbus (uint8_t modbus_instance)
 void setup_modbus(void)
 {
 
-    modbusinstance[0].ptt_pin = NONE; //ToDo
+    modbusinstance[0].ptt_pin = NONE_PIN; //ToDo
 
 
     // https://s.campbellsci.com/documents/us/manuals/climavue40.pdf

@@ -10,6 +10,7 @@
 #include <Arduino.h>
 
 void hmiPrintCommandPrompt(void);
+int hmiPuts(uint8_t port, char *str, uint8_t mode);
 int hmiPuts(const char *str, uint8_t mode);
 int hmiPutsTrace(const char *str);
 void hmi (void);
