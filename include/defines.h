@@ -221,6 +221,7 @@ struct AirComms{
   uint16_t tx_speed;
   uint8_t tx_buffer[16];
   uint8_t rx_buffer[16];
+  uint8_t rx_buffer_pos;
   uint16_t rx_compressor_speed; // 0.1 units
   uint16_t rx_compressor_currernt; // 0.1 units
   uint16_t rx_busbar_voltage; // 0.1 units
@@ -253,6 +254,33 @@ struct AirComms{
 #define MQTT_REP_MODBUS 11
 
 
+// The MQTT_UNIQUE items are added to mqtt_queue() so that redundant information can be removed
+// from the outgoing queue. If we have old values and new values about to be sent via MQTT, we 
+// can delete the old values, because only the new ones 
+
+#define MQTT_UNIQUE_SOFTHARDWARE 0
+#define MQTT_UNIQUE_TEMPERATRE 1
+#define MQTT_UNIQUE_TEMPERATRE_ALERT 2
+#define MQTT_UNIQUE_OUTPUTS_ALL 3
+#define MQTT_UNIQUE_OUTPUTS_CHANGE 4
+#define MQTT_UNIQUE_MODBUS 5
+#define MQTT_UNIQUE_ADC 6
+#define MQTT_UNIQUE_FAN_ALL 7
+#define MQTT_UNIQUE_AC 8
+
+#define MQTT_UNIQUE_MAX 16
+
+// Oldest First. 
+struct MqttToSend{
+  uint8_t sentence[96];
+  uint32_t secondsSinceStart;
+  JsonDocument jdoc;
+};
+
+
+
+
+
 // Only itens within this list will be reported via MQTT. Setting a frequency of 0 means 
 // it will only send on change. The idea behind next_report is that you can set this to 
 // secondssincestart+n and it will report then regardless.
@@ -263,6 +291,30 @@ struct MqttReporting{
   uint32_t next_report;
 
 };
+
+
+
+
+// Servives
+//
+
+
+#define SERVICE_CLI 0x0001
+#define SERVICE_ADC 0x0002
+#define SERVICE_TEMP 0x0004
+#define SERVICE_PWM 0x0008
+#define SERVICE_RPM 0x0010
+#define SERVICE_AC 0x0020
+#define SERVICE_MQTT 0x0040
+#define SERVICE_TELNET 0x0080
+#define SERVICE_OUTPUT 0x0100
+#define SERVICE_DOOR 0x0200
+#define SERVICE_MODBUS 0x0400
+
+
+
+
+
 
 
 #endif 

@@ -68,7 +68,7 @@
 
 
 
-
+uint32_t services = 0xFFFF; // What services are 'running'
 
 
 
@@ -204,6 +204,11 @@ struct MqttReporting mqttreporting [] = {
 };
 
 uint8_t mqttreporting_elementcount = sizeof (mqttreporting) / sizeof (mqttreporting[0]);
+
+
+
+struct MqttToSend mqtttosend[MQTT_UNIQUE_MAX];
+
 
 
 
@@ -429,7 +434,28 @@ void sample_RPM(void)
 
 void queueMQTT(char sentence[], char data[])
 {
-// QUEUE GHERE
+  uint8_t found = 255;
+  uint32_t mintime = 0xFFFF;
+  for (uint8_t i=0; i<MQTT_UNIQUE_MAX; i++){
+    if (mqtttosend[i].secondsSinceStart != 0){
+      if (mqtttosend[i].secondsSinceStart < mintime){
+        mintime = mqtttosend[i].secondsSinceStart;
+        found = i;
+      }
+    }
+  }
+
+  if (found != 255){
+    // we have found something to sebnd
+    
+    // *****************************
+    // ******* SEND THIS ONE *******
+    // *****************************
+
+    // Blank things out once sent
+    mqtttosend[found].secondsSinceStart = 0;
+    mqtttosend[found].sentence[0] = 0;
+  }
 } 
 
 void sendMqtt (char sentence[], char data[])
@@ -447,17 +473,36 @@ void sendMqtt (char sentence[], char data[])
   queueMQTT (sentence, data);
 }
 
-void sendMqtt (char sentence[], JsonDocument doc)
+void sendMqtt (uint8_t unique_identifier, char sentence[], JsonDocument doc)
 {
   // -----------------------------
   // SEND THE MQTT TO THE QUEUE... 
   // -----------------------------
+
+  // Only add to the queue if there is no unique_identifier in the queue already. 
+
+  // Question: Can we have an array of pointers to the json etc. That way we dont need to queue
+  // using a queue object but do it using something more locked down. Queue cannot get too big. Latest information
+  // is stored in the structure...
+
 
   // Send it as a trace, so that any CLI who needs to see it gets it
   // At the moment TRACE sends everywhere on CLI
   char buf[512];
   //snprintf (buf, 512, "%s|%s", sentence, data);
   hmiPuts (buf, HMI_TRACE);
+
+
+
+  // Add the JSON to the list of JSON to send. If there is already a JSON for the [unique_identifier]
+  // then throw it out and replace it with an updated JDOC. What this means is that only the latest 
+  // JSON of any identifier will be sent, but the oldest waiting JDOC will be sent first. 
+
+  mqtttosend[unique_identifier].jdoc = doc;
+  if (mqtttosend[unique_identifier].secondsSinceStart != 0){
+    mqtttosend[unique_identifier].secondsSinceStart = secondsSinceStart;
+  }
+  safe_strcat ((char *)mqtttosend[unique_identifier].sentence, sentence, 96);
 
   //queueMQTT (sentence, data);
 }
@@ -519,7 +564,7 @@ void sendMqttModbus(uint8_t modbusscanindex)
         doc["data"][j] = val;
       }
     }
-    sendMqtt(buf_sentence, doc);
+    sendMqtt(MQTT_UNIQUE_MODBUS ,buf_sentence, doc);
 }
 
 
@@ -587,7 +632,7 @@ void sendMqttADCorOutputs (bool outputs)
           }
           doc["data"][i] = state;
         }
-        sendMqtt (buf_sentence, doc);
+        sendMqtt (MQTT_UNIQUE_OUTPUTS_ALL, buf_sentence, doc);
       } else {
         JsonDocument doc;
         doc["time"] = secondsSinceStart;
@@ -605,7 +650,7 @@ void sendMqttADCorOutputs (bool outputs)
             }
           }
         }
-        sendMqtt (buf_sentence, doc);
+        sendMqtt (MQTT_UNIQUE_ADC, buf_sentence, doc);
       }
     }
   }
@@ -637,7 +682,7 @@ void sendMqttTemp (void)
       doc["data"][i] = tempstorage[i].temperature;
       doc["data"][i]['sample_time'] = tempstorage[i].secondsSinceStart;
     }
-    sendMqtt (buf_sentence, doc);
+    sendMqtt (MQTT_UNIQUE_TEMPERATRE, buf_sentence, doc);
 }
 
 
@@ -667,7 +712,7 @@ void sendMqttFan (void)
       doc["data"][i]["rpm"]["timediff"] = fan_pwm_rpm[i].timediff;
       doc["data"][i]["rpm"]["rpmcount"] = fan_pwm_rpm[i].rpmcount;
     }
-    sendMqtt (buf_sentence, doc);
+    sendMqtt (MQTT_UNIQUE_FAN_ALL, buf_sentence, doc);
 }
 
 void sendMqttAc (void)
@@ -696,7 +741,7 @@ void sendMqttAc (void)
     doc["data"]["power"] = aircomms.tx_power;
     doc["data"]["speed"] = aircomms.tx_speed;
 
-    sendMqtt (buf_sentence, doc);
+    sendMqtt (MQTT_UNIQUE_AC, buf_sentence, doc);
 }
 
 
@@ -724,15 +769,15 @@ void sendMqttSoftHardWare (void)
     doc["software"]["compile"] = "LAST_BUILD_TIME";
 
 
-    doc["hardware"]["processor"] = "";
+    doc["hardware"]["processor"] = "STM32F417";
     doc["hardware"]["MAC"] = "";
     doc["hardware"]["serial"] = "";
-    doc["hardware"]["product"] = "";
-    doc["hardware"]["version"] = "";
+    doc["hardware"]["product"] = "HUB Motherboard V3";
+    doc["hardware"]["version"] = "0.1";
 
 
 
-    sendMqtt (buf_sentence, doc);
+    sendMqtt (MQTT_UNIQUE_SOFTHARDWARE, buf_sentence, doc);
 }
 
 void mqtt_door (uint8_t door_number, bool state){
@@ -751,25 +796,27 @@ void mqtt_door (uint8_t door_number, bool state){
 // Interface
 void setFanPWM(uint8_t fan, uint8_t percent)
 {
-  switch (fan){
-    case 0:
-      stmFanTimer_TIM3->setCaptureCompare(3, percent, PERCENT_COMPARE_FORMAT); 
-      break;
-    case 1:
-      stmFanTimer_TIM3->setCaptureCompare(4, percent, PERCENT_COMPARE_FORMAT); 
-      break;
-    case 2:
-      stmFanTimer_TIM4->setCaptureCompare(1, percent, PERCENT_COMPARE_FORMAT); 
-      break;
-    case 3:
-      stmFanTimer_TIM4->setCaptureCompare(2, percent, PERCENT_COMPARE_FORMAT); 
-      break;
-    case 4:
-      stmFanTimer_TIM4->setCaptureCompare(3, percent, PERCENT_COMPARE_FORMAT); 
-      break;
-    case 5:
-      stmFanTimer_TIM4->setCaptureCompare(4, percent, PERCENT_COMPARE_FORMAT); 
-      break;
+  if (services & SERVICE_PWM){
+    switch (fan){
+      case 0:
+        stmFanTimer_TIM3->setCaptureCompare(3, percent, PERCENT_COMPARE_FORMAT); 
+        break;
+      case 1:
+        stmFanTimer_TIM3->setCaptureCompare(4, percent, PERCENT_COMPARE_FORMAT); 
+        break;
+      case 2:
+        stmFanTimer_TIM4->setCaptureCompare(1, percent, PERCENT_COMPARE_FORMAT); 
+        break;
+      case 3:
+        stmFanTimer_TIM4->setCaptureCompare(2, percent, PERCENT_COMPARE_FORMAT); 
+        break;
+      case 4:
+        stmFanTimer_TIM4->setCaptureCompare(3, percent, PERCENT_COMPARE_FORMAT); 
+        break;
+      case 5:
+        stmFanTimer_TIM4->setCaptureCompare(4, percent, PERCENT_COMPARE_FORMAT); 
+        break;
+    }
   }
 }
 
@@ -966,17 +1013,21 @@ void door (uint8_t door_number, uint8_t dooraction)
       // 600  True  DIR   - Turn power on
       // 1600 False DIR   - Turn power off
       // 1700 False False - Neutral State
-      door_pin_a.begin (doorpins[door_number].pin_a)
-        .lead (600)
-        .on()
-        .blink (1000)
-        .off();
+      if (services & SERVICE_DOOR){
+        door_pin_a.begin (doorpins[door_number].pin_a)
+          .lead (600)
+          .on()
+          .blink (1000)
+          .off();
+      }
       if (state){
-        // Only needed if we are chanting the state of pin B
-        door_pin_b.begin (doorpins[door_number].pin_b)
-        .lead(500)
-        .blink (1200)
-        .off();
+        if (services & SERVICE_DOOR){
+          // Only needed if we are chanting the state of pin B
+          door_pin_b.begin (doorpins[door_number].pin_b)
+          .lead(500)
+          .blink (1200)
+          .off();
+        }
       }
     }
     if (doorpins[door_number].h_bridge == true){
@@ -989,52 +1040,29 @@ void door (uint8_t door_number, uint8_t dooraction)
       // Turn off both outputs.
 
       if (state == true){
-        door_pin_a.begin (doorpins[door_number].pin_a)
-          .off()
-          .pause(500)
-          .blink(1000)
-          .off();
-        door_pin_b.begin (doorpins[door_number].pin_b)
-          .off();
+        if (services & SERVICE_DOOR){
+          door_pin_a.begin (doorpins[door_number].pin_a)
+            .off()
+            .pause(500)
+            .blink(1000)
+            .off();
+          door_pin_b.begin (doorpins[door_number].pin_b)
+            .off();
+        }
       }
       if (state == true){
-        door_pin_a.begin (doorpins[door_number].pin_a)
-          .off();
-        door_pin_b.begin (doorpins[door_number].pin_b)
-          .off()
-          .pause(500)
-          .blink(1000)
-          .off();
-      }
-
-
-
-
-      // Set direction -> Turn power on -> turn off -> unset direction
-      // time pin_a pin_b
-      // 0    False False - Neutral State just in case
-      // 500  False DIR   - Set direction
-      // 600  True  DIR   - Turn power on
-      // 1600 False DIR   - Turn power off
-      // 1700 False False - Neutral State
-      door_pin_a.begin (doorpins[door_number].pin_a)
-        .lead (600)
-        .on()
-        .blink (1000)
-        .off();
-      if (state){
-        // Only needed if we are chanting the state of pin B
-        door_pin_b.begin (doorpins[door_number].pin_b)
-        .lead(500)
-        .blink (1200)
-        .off();
+        if (services & SERVICE_DOOR){
+          door_pin_a.begin (doorpins[door_number].pin_a)
+            .off();
+          door_pin_b.begin (doorpins[door_number].pin_b)
+            .off()
+            .pause(500)
+            .blink(1000)
+            .off();
+        }  
       }
     }
-
-
-
   }
-
 }
 
 
@@ -1337,14 +1365,18 @@ void setup_ports(void){
       case port_serial_rs485:
         Serial4.begin(portinformation[i].serial_bps, portinformation[i].serial_config);      
         portinformation[i].s = Serial4;
-        NonBlockingModbusMaster nbmm;
-        portinformation[i].modbus = nbmm;
-        portinformation[i].modbus.initialize (portinformation[i].s, 5000, 5000, 1000000); // Delays are in uSec. TxDelay, TxHang, Timeout
+        if (services & SERVICE_MODBUS){
+          NonBlockingModbusMaster nbmm;
+          portinformation[i].modbus = nbmm;
+          portinformation[i].modbus.initialize (portinformation[i].s, 5000, 5000, 1000000); // Delays are in uSec. TxDelay, TxHang, Timeout
+        }
         break;
       // Ethernet Serial Port Abstraction
       case port_ethernet_telnet:
-        // To Be done
-        //n portinformation[i].s = nothin;
+        if (services & SERVICE_TELNET){
+          // To Be done
+          //n portinformation[i].s = nothin;
+        }
         break;
     }
     switch (portinformation[i].portfunction){
@@ -1367,7 +1399,6 @@ void setup_ports(void){
 
 
 
-
 // -----------------------------------------------------
 // SETUP
 // -----------------------------------------------------
@@ -1377,19 +1408,50 @@ void setup_ports(void){
 void setup (void)
 {
 
+  for (uint8_t i=0; i < MQTT_UNIQUE_MAX; i++){
+    mqtttosend[i].secondsSinceStart = 0;
+  }
+  setup_ports();
 
-    setup_ports();
 
-    setup_RPM();
+  if (services & SERVICE_CLI){      
+  }
+  if (services & SERVICE_ADC){      
     setup_adc();
-    setup_modbus();
+  }
+  if (services & SERVICE_TEMP){      
+    setup_temperature();
+  }
+  if (services & SERVICE_PWM){    
+    setup_PWM();  
+  }
+  if (services & SERVICE_RPM){      
+    setup_RPM();
+  }
+  if (services & SERVICE_AC){      
+  }
+  if (services & SERVICE_MQTT){      
+  }
+  if (services & SERVICE_TELNET){      
+  }
+  if (services & SERVICE_OUTPUT){      
+  }
+  if (services & SERVICE_DOOR){      
+  }
+  if (services & SERVICE_MODBUS){      
+    setup_modbus(); // It is OK if this runs and we dont do modbus later. 
+  }
 
+
+
+
+  
 }
 
 
 
 
-void aircomms_something ()
+void aircomms_settx ()
 {
   aircomms.tx_buffer[0] = 0xAA;
   aircomms.tx_buffer[1] = 0x00;
@@ -1418,7 +1480,7 @@ void aircomms_something ()
 
 }
 
-void aircomms_decode(void)
+bool aircomms_decode(void)
 {
 
   uint16_t chksum = 0x100 - ((aircomms.rx_buffer[1] + aircomms.rx_buffer[2] + aircomms.rx_buffer[3] + aircomms.rx_buffer[4] +
@@ -1432,12 +1494,9 @@ void aircomms_decode(void)
     (aircomms.rx_buffer[15] != 0x55) ||
     (aircomms.rx_buffer[8] != 0x00) ||
     (aircomms.rx_buffer[12] != 0x00) || 
-    (aircomms.rx_buffer[13] != chksum)
-  )
-  {
-    ToDo
-    // Mark Error
-    return;
+    (aircomms.rx_buffer[14] != chksum)
+  ){
+    return false;
   }
 
   aircomms.rx_compressor_speed = aircomms.rx_buffer[2] + (aircomms.rx_buffer[3]<<8);
@@ -1446,7 +1505,7 @@ void aircomms_decode(void)
   aircomms.rx_status_now = aircomms.rx_buffer[13];
   aircomms.rx_status_historical = aircomms.rx_buffer[9];
   aircomms.rx_secondssincestart = secondsSinceStart; // Save time of latest reading 
-
+  return true;
 }
 
 
@@ -1659,19 +1718,28 @@ bool processMQTTchar(uint8_t port)
 
 bool processACchar(uint8_t port)
 {
-  PortInformation &pi = portinformation[i];
+  PortInformation &pi = portinformation[port];
 
   while (pi.s.available()){
     pi.RxLast = millis();
-    pi.RxBuffer[pi.RxBufferSize] = pi.s.read();
-    pi.RxBufferSize++;
-    if (endofpacket(i, pi.RxBuffer[pi.RxBufferSize-1])){
-      processSerial(i); //process
-      pi.RxBufferSize = 0;           
+    aircomms.rx_buffer[aircomms.rx_buffer_pos] = pi.s.read();
+    if (aircomms.rx_buffer_pos == 0){
+      if (aircomms.rx_buffer[aircomms.rx_buffer_pos] != 0xAA){
+        // Bad beginning of packet
+        return;
+      }
     }
-    if (pi.RxBufferSize >= (BUFFER_SIZE_TX-2)){
-      processSerial(i); //process
-      pi.RxBufferSize = 0;
+    aircomms.rx_buffer_pos++;
+    if (aircomms.rx_buffer_pos == 15){
+      if (aircomms_decode()){
+        // The packet is valid...
+
+        // *****************
+        // Do Something Here
+        // *****************
+
+      }
+      aircomms.rx_buffer_pos;
     }
   }
 }
@@ -1721,9 +1789,47 @@ void loop (void)
   }
 
 
-  // bitrate is 16.3 kbps, so we have to sample at least at
-  // 32.6 khz. Do this once per loop.
-  temperature_loop();
+    if (services & SERVICE_CLI){      
+    }
+    if (services & SERVICE_ADC){      
+      // This is done via the AUTOMATON state machine. Dont need to worry about it
+    }
+    // if (services & SERVICE_TEMP){      
+    // }
+    if (services & SERVICE_PWM){      
+    }
+    if (services & SERVICE_RPM){     
+      // dont do this every loop. Just every so often
+      sample_RPM(); 
+    }
+    if (services & SERVICE_AC){
+      // dont do this every loop
+      aircomms_settx();
+      then send the tx...
+    }
+    if (services & SERVICE_MQTT){      
+    }
+    if (services & SERVICE_TELNET){      
+    }
+    if (services & SERVICE_OUTPUT){      
+    }
+    // if (services & SERVICE_DOOR){      
+    // }
+    // if (services & SERVICE_MODBUS){      
+    // }
+
+
+
+
+    if (services & SERVICE_TEMP){      
+      // bitrate is 16.3 kbps, so we have to sample at least at
+      // 32.6 khz. Do this once per loop.
+      temperature_loop();
+    }
+
+
+
+
 
 
   // We probably do not need to run this every loop
@@ -1735,7 +1841,9 @@ void loop (void)
   
   if ((every & 0x1F) == 0){
     // Run this every 32 loops
-    modbus_loop();
+    if (services & SERVICE_MODBUS){      
+      modbus_loop();
+    }
   }
 
 
