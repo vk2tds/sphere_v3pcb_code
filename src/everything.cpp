@@ -148,6 +148,8 @@ struct TempPins temppins[MAX_TEMP_STRINGS]{
 
 
 // PWM is also set by timer
+// NOTE: PWM is partially hard coded, just because of how things work
+// RPM is based on interrupts, so this can be a bit complex too. 
 struct FanPorts fanpins[MAX_FAN_PWM_RPM]{
     {0, PC8, PC0}, // TIM3-3
     {1, PC9, PE10}, // TIM3-4
@@ -164,7 +166,7 @@ struct DoorPins doorpins[MAX_DOORS]{
 };
 
 
-
+// NOTE: NonBlockingModbusMaster is CUSTOM
 NonBlockingModbusMaster nullmodbus; // dont really want this but the easiest solution to storing a null reference to a class. 
 NullStream nullstream;
 
@@ -1335,6 +1337,8 @@ void setup_ports(void){
         if (services & SERVICE_MODBUS){
           NonBlockingModbusMaster nbmm;
           portinformation[i].modbus = nbmm;
+          // NOTE: The NonBlockingModbusMaster is CUSTOM and is included by value rather than reference. It has
+          // a PTT pin defined for RS485
           portinformation[i].modbus.initialize (portinformation[i].s, 5000, 5000, modbusinstance[i].ptt_pin ,1000000); // Delays are in uSec. TxDelay, TxHang, Timeout
         }
         break;
@@ -1362,8 +1366,20 @@ void setup_ports(void){
 
 
 
+void setup_loadservices (void)
+{
+  // eventually load this from flash
+  services = 0xFFFF;
 
+}
 
+void PowerOnSelfTest (void)
+{
+  // Not even sure we want to do anything here. 
+  
+  // maybe flash the trailer lights, just to say hello. 
+
+}
 
 
 // -----------------------------------------------------
@@ -1374,6 +1390,8 @@ void setup_ports(void){
 
 void setup (void)
 {
+
+  setup_loadservices();
 
   for (uint8_t i=0; i < MQTT_UNIQUE_MAX; i++){
     mqtttosend[i].secondsSinceStart = 0;
@@ -1411,7 +1429,7 @@ void setup (void)
 
 
 
-
+  PowerOnSelfTest();
   
 }
 
@@ -1488,23 +1506,7 @@ bool aircomms_decode(void)
 
 
 
-// // -----------------------------------------------------
-// // SYNC
-// // -----------------------------------------------------
 
-
-// void sync (void){
-
-//   // DOORS
-//   for (uint8_t i=0; i < MAX_DOORS;i++){
-//      (if doorstorage[i].DoorState != doorpins[i].state)
-
-
-
-//   }
-
-
-// }
 
 void processSerial (uint8_t port)
 {
@@ -1700,11 +1702,7 @@ bool processACchar(uint8_t port)
     if (aircomms.rx_buffer_pos == 15){
       if (aircomms_decode()){
         // The packet is valid...
-
-        // *****************
-        // Do Something Here
-        // *****************
-
+        sendMqttAc();
       }
       aircomms.rx_buffer_pos;
     }
