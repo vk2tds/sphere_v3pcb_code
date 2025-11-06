@@ -19,6 +19,7 @@
 // Temperature - Library Polled
 // Door - Event driven with timers
 
+// In the future logging will be also done via MQTT
 
 
 
@@ -323,30 +324,11 @@ struct TEMPstorage tempstorage [MAX_TEMP_STRINGS];
 struct DOORstorage doorstorage [MAX_DOORS];
 
 
-
-
-
-
-
-
-void hardwareDoor (uint8_t door, uint8_t dooraction){
-  switch (dooraction){
-    case 0:
-      doorstorage[door].DoorState = false;
-    case 1:
-      doorstorage[door].DoorState = true;
-    case 2: // In the future this might change to something else. This is to unlock then lock the door
-      doorstorage[door].DoorState = true;
-    }
-    sync();
-}
-
-
-
-
 // ----------
 // Fans - RPM
 // ----------
+//
+// These are interrupt handlers
 
 void fansRpmInt_A (void)
 {
@@ -446,7 +428,7 @@ void queueMQTT(char sentence[], char data[])
   }
 
   if (found != 255){
-    // we have found something to sebnd
+    // we have found something to send
     
     // *****************************
     // ******* SEND THIS ONE *******
@@ -832,6 +814,10 @@ void setFanPWMs(void)
 void setup_PWM (void)
 {
 
+  // Note: Timers are weird on the STM32. Some timer pins are on 'Alternate' outputs. These need to be
+  // explicity highlightes as being ALTERNATE pins, else things will not work as anticipated. 
+
+  // ToDo: Make sure that pins are correct
 
   stmFanTimer_TIM3->pause();
   stmFanTimer_TIM4->pause();
@@ -868,7 +854,7 @@ void setup_PWM (void)
 
 boolean tempsStale[6];
 
-// ToDo: This needs to be improcved. If there are two sensors per input, it will only show one.
+// ToDo: This needs to be improved. If there are two sensors per input, it will only show one.
 void handleIntervalElapsed(int port, int deviceIndex, float temperature, String address)
 {
   if (tempsStale[port]){
@@ -884,6 +870,7 @@ void handleIntervalElapsed(int port, int deviceIndex, float temperature, String 
 }
 
 
+// Individulal callbacks work best
 
 void handleIntervalElapsed_A(int deviceIndex, int32_t temperatureRAW)
 {
@@ -1091,7 +1078,7 @@ void adc_callback_state_2_set_adc_port_and_read (int idx, int v, int up)
 
 
   // ToDo: add ADC
-  adcstorage[adc_index].readADC(adc_index & 0x03) = 0; // The value actually gets stored here.
+  adcstorage[adc_index].adc = ADS[1]->getValue();
   adcstorage[adc_index].secondsSinceStart = secondsSinceStart;
 
   adc_index ++;
@@ -1107,7 +1094,7 @@ void adc_callback_state_1_set_multiplexor (int idx, int v, int up)
   uint8_t multiplexor = adc_index >> 2;
 
   // ToDo: Read ADC
-  ADC[adc_index].readADC(adc_index & 0x03);
+  ADS[adc_index]->requestADC(adc_index & 0x03); // Throw away the value. This just sets the port
 
   adc_step_timer.begin(20).onTimer(adc_callback_state_2_set_adc_port_and_read).start();
 }
@@ -1129,16 +1116,16 @@ void init_adc (uint8_t bus, uint8_t device)
 {
   uint8_t index = (bus*4)+device;
   if (bus == 0){
-    ADC[index] = new ADS1115 (0x048 + device, &Wire1);
+    ADS[index] = new ADS1115 (0x048 + device, &Wire1);
   } else {
-    ADC[index] = new ADS1115 (0x048 + device, &Wire2);
+    ADS[index] = new ADS1115 (0x048 + device, &Wire2);
   }
 
-  ADC[index].begin();
-  ADC[index].setGain(0);         //  0 == 6.144 volt, default
-  ADC[index].setDataRate(7);     //  0 = slow   4 = medium   7 = fast
-  ADC[index].setMode(0);         //  0 == continuous mode
-  ADC[index].readADC(channel_1); //  0 == default channel,  trigger first read
+  ADS[index]->begin();
+  ADS[index]->setGain(0);         //  0 == 6.144 volt, default
+  ADS[index]->setDataRate(7);     //  0 = slow   4 = medium   7 = fast
+  ADS[index]->setMode(0);         //  0 == continuous mode
+  ADS[index]->requestADC(0); //  0 == default channel,  trigger first read
 
 }
 
@@ -1210,22 +1197,6 @@ Atm_led modbus_machine;
 
 struct ModbusInstance modbusinstance[MAX_MODBUSINSTANCES];
 
-void modbus_loop (void)
-{
-  for (uint8_t i = 0; i < MAX_MODBUSINSTANCES; i++){
-    if (modbusinstance[i].modbusinstance.isTransmit() == false){
-      if (modbusinstance[i].transmit == true){
-        if (modbusinstance[i].serial.isBufferEmpty()){
-          door_pin_a.begin (modbusinstance[i].ptt_pin)
-            .on()
-            .pause(1)
-            .off(); // Hope this is SHORT enough... else, I might need to change the library. 
-          modbusinstance[i].transmit = false;
-        }
-      }
-    }
-  }
-}
 
 
 
@@ -1275,25 +1246,21 @@ void pollModbus (uint8_t modbus_instance)
 
     switch (modbusscan[next].type){
       case MODBUS_COILS:
-        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
         modbusinstance[modbus_instance].transmit = true;
         modbusinstance[modbus_instance].modbusscan_index = next;
         modbusinstance[modbus_instance].modbusinstance.readCoils(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
         break;
       case MODBUS_DISCRETE_INPUTS:
-        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
         modbusinstance[modbus_instance].transmit = true;
         modbusinstance[modbus_instance].modbusscan_index = next;
         modbusinstance[modbus_instance].modbusinstance.readDiscreteInputs(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
         break;
       case MODBUS_HOLDING_REGISTERS:
-        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
         modbusinstance[modbus_instance].transmit = true;
         modbusinstance[modbus_instance].modbusscan_index = next;
         modbusinstance[modbus_instance].modbusinstance.readHoldingRegisters(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
         break;
       case MODBUS_INPUT_REGISTERS:
-        digitalWrite (modbusinstance[modbus_instance].ptt_pin, true);
         modbusinstance[modbus_instance].transmit = true;
         modbusinstance[modbus_instance].modbusscan_index = next;
         modbusinstance[modbus_instance].modbusinstance.readInputRegisters(modbusscan[next].modbus_address, modbusscan[next].start_address, modbusscan[next].values, processModbusData);
@@ -1336,7 +1303,7 @@ struct NullStream : public Stream{
   int available( void ) { return 0; }
   void flush( void ) { return; }
   int peek( void ) { return -1; }
-  int read( void ){ return -1 };
+  int read( void ){ return -1; }
   size_t write( uint8_t u_Data ){ return u_Data, 0x01; }
 };
 
@@ -1368,7 +1335,7 @@ void setup_ports(void){
         if (services & SERVICE_MODBUS){
           NonBlockingModbusMaster nbmm;
           portinformation[i].modbus = nbmm;
-          portinformation[i].modbus.initialize (portinformation[i].s, 5000, 5000, 1000000); // Delays are in uSec. TxDelay, TxHang, Timeout
+          portinformation[i].modbus.initialize (portinformation[i].s, 5000, 5000, modbusinstance[i].ptt_pin ,1000000); // Delays are in uSec. TxDelay, TxHang, Timeout
         }
         break;
       // Ethernet Serial Port Abstraction
@@ -1569,7 +1536,7 @@ bool endofpacket (uint8_t port, uint8_t c)
       case portfunction_cli:
       case portfunction_serialMQTT:
         if (c < 0x20){
-          portinformation[port].RxBuffer[portinformation[port].RxBufferInPos % BUFFER_SIZE_RX] = 0;
+          portinformation[port].RxBuffer[portinformation[port].RxBufferSize] = 0;
           return true;
         } else {
           return false;
@@ -1705,12 +1672,12 @@ bool processMQTTchar(uint8_t port)
     pi.RxLast = millis();
     pi.RxBuffer[pi.RxBufferSize] = pi.s.read();
     pi.RxBufferSize++;
-    if (endofpacket(i, pi.RxBuffer[pi.RxBufferSize-1])){
-      processSerial(i); //process
+    if (endofpacket(port, pi.RxBuffer[pi.RxBufferSize-1])){
+      processSerial(port); //process
       pi.RxBufferSize = 0;           
     }
     if (pi.RxBufferSize >= (BUFFER_SIZE_TX-2)){
-      processSerial(i); //process
+      processSerial(port); //process
       pi.RxBufferSize = 0;
     }
   }
@@ -1833,7 +1800,6 @@ void loop (void)
 
 
   // We probably do not need to run this every loop
-  // Particularly if we fix PTT on RS485
   if ((every & 0x0F) == 0){
     // Run the state machine.
     automaton.run();
@@ -1841,9 +1807,6 @@ void loop (void)
   
   if ((every & 0x1F) == 0){
     // Run this every 32 loops
-    if (services & SERVICE_MODBUS){      
-      modbus_loop();
-    }
   }
 
 
@@ -1913,8 +1876,10 @@ void loop (void)
         case portfunction_serialAC:
           break;
         case portfunction_serialMODBUS:
-          if (portinformation[i].modbus.justFinished()) { // Also manage timeout
-            xxx
+          if (services & SERVICE_MODBUS){      
+            if (portinformation[i].modbus.justFinished()) { // Also manage timeout
+            xxx();
+            }
           }
           break;
         default: 
